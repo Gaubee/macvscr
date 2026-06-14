@@ -8,7 +8,7 @@ import AppKit
 /// each other through the width:
 ///   - set width   -> keep aspect, height = width / aspect
 ///   - set aspect  -> keep width,  height = width / aspect
-///   - set height  -> keep width,  aspect = width / height (snaps to standard or custom)
+///   - set height  -> keep width,  aspect = width / height (exact, custom)
 final class TrayController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let display = VirtualDisplay()
@@ -60,16 +60,17 @@ final class TrayController: NSObject {
 
         menu.addItem(.separator())
 
-        let presets = menu.addItem(withTitle: "Presets ▸", action: nil, keyEquivalent: "")
+        // NSMenu renders its own submenu disclosure arrow, so no "▸" in titles.
+        let presets = menu.addItem(withTitle: "Presets", action: nil, keyEquivalent: "")
         presets.submenu = presetsSubmenu()
 
-        let widths = menu.addItem(withTitle: "Width ▸", action: nil, keyEquivalent: "")
+        let widths = menu.addItem(withTitle: "Width", action: nil, keyEquivalent: "")
         widths.submenu = widthSubmenu()
 
-        let heights = menu.addItem(withTitle: "Height ▸", action: nil, keyEquivalent: "")
+        let heights = menu.addItem(withTitle: "Height", action: nil, keyEquivalent: "")
         heights.submenu = heightSubmenu()
 
-        let ratios = menu.addItem(withTitle: "Aspect ▸", action: nil, keyEquivalent: "")
+        let ratios = menu.addItem(withTitle: "Aspect", action: nil, keyEquivalent: "")
         ratios.submenu = ratioSubmenu()
 
         let hidpiItem = menu.addItem(withTitle: "HiDPI / Retina @2x", action: #selector(toggleHiDPI), keyEquivalent: "")
@@ -99,8 +100,9 @@ final class TrayController: NSObject {
     private func widthSubmenu() -> NSMenu {
         let m = NSMenu(); m.autoenablesItems = false
         for w in Presets.widths {
-            let item = m.addItem(withTitle: "\(w)  →  \(w)×\(Geometry.height(forWidth: w, aspect: aspect))",
-                                 action: #selector(pickWidth(_:)), keyEquivalent: "")
+            let h = Geometry.height(forWidth: w, aspect: aspect)
+            let item = m.addItem(withTitle: "", action: #selector(pickWidth(_:)), keyEquivalent: "")
+            item.attributedTitle = resolutionTitle(w, boldWidth: true, h)
             item.target = self
             item.representedObject = Int(w)
             if w == logicalWidth { item.state = .on }
@@ -114,7 +116,8 @@ final class TrayController: NSObject {
     private func heightSubmenu() -> NSMenu {
         let m = NSMenu(); m.autoenablesItems = false
         for h in Presets.heights {
-            let item = m.addItem(withTitle: "\(h)", action: #selector(pickHeight(_:)), keyEquivalent: "")
+            let item = m.addItem(withTitle: "", action: #selector(pickHeight(_:)), keyEquivalent: "")
+            item.attributedTitle = resolutionTitle(logicalWidth, boldWidth: false, h)
             item.target = self
             item.representedObject = Int(h)
             if h == logicalHeight { item.state = .on }
@@ -141,6 +144,17 @@ final class TrayController: NSObject {
         return m
     }
 
+    /// "W × H" with the picked dimension bolded (for the Width/Height submenus).
+    private func resolutionTitle(_ w: UInt32, boldWidth: Bool, _ h: UInt32) -> NSAttributedString {
+        let base = NSFont.menuFont(ofSize: 0)
+        let bold = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
+        let a = NSMutableAttributedString()
+        a.append(NSAttributedString(string: "\(w)", attributes: [.font: boldWidth ? bold : base]))
+        a.append(NSAttributedString(string: " × ", attributes: [.font: base]))
+        a.append(NSAttributedString(string: "\(h)", attributes: [.font: boldWidth ? base : bold]))
+        return a
+    }
+
     private func isActive(logicalW: UInt32, logicalH: UInt32, hidpi: Bool) -> Bool {
         guard let a = applied else { return false }
         return a.logicalWidth == logicalW && a.logicalHeight == logicalH && a.hidpi == hidpi
@@ -163,7 +177,8 @@ final class TrayController: NSObject {
 
     @objc func pickHeight(_ s: NSMenuItem) {
         guard let h = s.representedObject as? Int else { return }
-        aspect = Geometry.aspectFrom(width: logicalWidth, height: UInt32(h)); apply()
+        // Exact: honor the picked height by using a precise (custom) aspect.
+        aspect = .custom(factor: Double(logicalWidth) / Double(UInt32(h))); apply()
     }
 
     @objc func pickRatio(_ s: NSMenuItem) {
@@ -182,7 +197,7 @@ final class TrayController: NSObject {
         guard let h = promptUInt32(title: "Custom height",
                                    message: "Logical pixels; keeps current width, aspect adjusts",
                                    current: logicalHeight) else { return }
-        aspect = Geometry.aspectFrom(width: logicalWidth, height: h); apply()
+        aspect = .custom(factor: Double(logicalWidth) / Double(h)); apply()
     }
 
     @objc func customRatio() {
@@ -212,6 +227,7 @@ final class TrayController: NSObject {
 
     private func promptUInt32(title: String, message: String, current: UInt32) -> UInt32? {
         let alert = NSAlert()
+        alert.icon = NSImage(systemSymbolName: "display", accessibilityDescription: "macvscr")
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .informational
@@ -227,6 +243,7 @@ final class TrayController: NSObject {
 
     private func promptCustomRatio() -> Geometry.Aspect? {
         let alert = NSAlert()
+        alert.icon = NSImage(systemSymbolName: "display", accessibilityDescription: "macvscr")
         alert.messageText = "Custom aspect"
         alert.informativeText = "Enter W:H, e.g. 21:9 or 16:10"
         alert.alertStyle = .informational
