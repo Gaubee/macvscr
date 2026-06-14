@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (arm64, release)
+        run: swift build -c release --arch arm64
+      - name: Smoke test (--help; exits before any GUI)
+        run: .build/release/macvscr --help | head -5

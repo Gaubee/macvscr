@@ -1,0 +1,44 @@
+name: release
+
+# Publish macvscr to npm on a v* tag, using npm trusted publishing (OIDC).
+# The npm package must be configured to trust this repo/workflow (done once on npm).
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: macos-14 # Apple Silicon runner → native arm64 build
+    permissions:
+      id-token: write # required for npm trusted publishing / provenance
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build (arm64)
+        run: swift build -c release --arch arm64
+
+      - name: Stage binary into the npm package
+        run: |
+          mkdir -p npm/binaries
+          cp .build/release/macvscr npm/binaries/macvscr-darwin-arm64
+          chmod +x npm/binaries/macvscr-darwin-arm64
+          ls -lh npm/binaries/
+
+      - name: Verify package contents
+        working-directory: npm
+        run: npm pack --dry-run
+
+      - name: Publish to npm (trusted publishing + provenance)
+        working-directory: npm
+        run: npm publish --provenance --access public

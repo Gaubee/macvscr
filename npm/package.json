@@ -1,0 +1,47 @@
+{
+  "name": "macvscr",
+  "version": "0.2.0",
+  "description": "macOS menu-bar tool that creates controllable virtual displays — arbitrary resolution, HiDPI, aspect ratio, and iMac presets. Unblocks HiDPI screen-sharing on headless Macs.",
+  "bin": {
+    "macvscr": "bin/macvscr.js"
+  },
+  "files": [
+    "bin/",
+    "binaries/",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "preferGlobal": true,
+  "keywords": [
+    "macos",
+    "virtual-display",
+    "dummy-display",
+    "menubar",
+    "tray",
+    "hidpi",
+    "retina",
+    "resolution",
+    "headless",
+    "screen-sharing",
+    "mac-mini",
+    "imac",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "gaubee",
+  "homepage": "https://github.com/gaubee/macvscr",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gaubee/macvscr.git",
+    "directory": "npm"
+  }
+}
