@@ -148,7 +148,7 @@ final class TrayController: NSObject {
         if case .standard = aspect { isStandard = true } else { isStandard = false }
         addCustomItem(to: m, action: #selector(customRatio),
                       isPreset: isStandard,
-                      value: isStandard ? "" : String(format: "%.2f", aspect.factor))
+                      value: isStandard ? "" : reducedRatio())
         return m
     }
 
@@ -181,6 +181,14 @@ final class TrayController: NSObject {
 
     private func widthForHeight(_ h: UInt32) -> UInt32 {
         UInt32((Double(h) * aspect.factor).rounded())
+    }
+
+    /// Current resolution as a reduced W:H ratio string (e.g. "43:18"), shown in
+    /// the Aspect submenu's Custom item when the aspect isn't a standard ratio.
+    private func reducedRatio() -> String {
+        func gcd(_ a: UInt32, _ b: UInt32) -> UInt32 { b == 0 ? a : gcd(b, a % b) }
+        let d = gcd(logicalWidth, logicalHeight)
+        return "\(logicalWidth / d):\(logicalHeight / d)"
     }
 
     private func isActive(logicalW: UInt32, logicalH: UInt32, hidpi: Bool) -> Bool {
