@@ -4,12 +4,12 @@ import AppKit
 /// width + aspect + hidpi state (all in LOGICAL pixels). The whole NSMenu is
 /// rebuilt on every change so the headline and checkmarks always reflect reality.
 ///
-/// Linking model (aspect is the lock; either dimension derives the other):
-///   - set width   -> keep aspect, height = width  / aspect
-///   - set height  -> keep aspect, width  = height * aspect
-///   - set aspect  -> keep width,  height = width  / aspect
-/// Width and Height submenus list the SAME sizes; they differ only in which
-/// dimension is bolded.
+/// Linking model: by default the aspect ratio is locked, so changing one
+/// dimension derives the other. The Custom dialogs can unlock it:
+///   - Width / Height Custom : a "Lock aspect ratio" checkbox.
+///   - Aspect Custom         : a "Keep width | Keep height" switch.
+/// Quick-pick submenus (Width / Height) are always aspect-locked and list the
+/// SAME sizes; they differ only in which dimension is bolded.
 final class TrayController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let display = VirtualDisplay()
@@ -215,52 +215,75 @@ final class TrayController: NSObject {
 
     @objc func customWidth() {
         let aspect = self.aspect
+        let oldHeight = self.logicalHeight
         let hidpi = self.hidpi
-        guard let s = PromptPanel.run(
+        let res = PromptPanel.run(
             title: "Custom width",
-            message: "Enter a width in logical pixels. Height follows the current aspect ratio.",
+            message: "Enter a width in logical pixels.",
             initial: "\(logicalWidth)",
-            preview: { input in
+            checkbox: ("Lock aspect ratio", true),
+            preview: { input, lock, _ in
                 guard let w = UInt32(input.trimmingCharacters(in: .whitespaces)) else { return nil }
-                let h = Geometry.height(forWidth: w, aspect: aspect)
+                let h = lock ? Geometry.height(forWidth: w, aspect: aspect) : oldHeight
                 return "\(w) × \(h)\(hidpi ? "  ·  @2x" : "")"
-            }) else { return }
-        guard let w = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
-        logicalWidth = w; apply()
+            })
+        guard let s = res.value, let w = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
+        logicalWidth = w
+        if !res.checkbox { aspect = Geometry.aspectFrom(width: w, height: oldHeight) }
+        apply()
     }
 
     @objc func customHeight() {
         let aspect = self.aspect
+        let oldWidth = self.logicalWidth
         let hidpi = self.hidpi
-        guard let s = PromptPanel.run(
+        let res = PromptPanel.run(
             title: "Custom height",
-            message: "Enter a height in logical pixels. Width follows the current aspect ratio.",
+            message: "Enter a height in logical pixels.",
             initial: "\(logicalHeight)",
-            preview: { input in
+            checkbox: ("Lock aspect ratio", true),
+            preview: { input, lock, _ in
                 guard let h = UInt32(input.trimmingCharacters(in: .whitespaces)) else { return nil }
-                let w = UInt32((Double(h) * aspect.factor).rounded())
+                let w = lock ? UInt32((Double(h) * aspect.factor).rounded()) : oldWidth
                 return "\(w) × \(h)\(hidpi ? "  ·  @2x" : "")"
-            }) else { return }
-        guard let h = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
-        logicalWidth = UInt32((Double(h) * aspect.factor).rounded()); apply()
+            })
+        guard let s = res.value, let h = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
+        if res.checkbox {
+            logicalWidth = UInt32((Double(h) * aspect.factor).rounded())
+        } else {
+            aspect = Geometry.aspectFrom(width: oldWidth, height: h)
+        }
+        apply()
     }
 
     @objc func customRatio() {
         let width = self.logicalWidth
+        let height = self.logicalHeight
         let hidpi = self.hidpi
-        guard let s = PromptPanel.run(
+        let res = PromptPanel.run(
             title: "Custom aspect",
-            message: "Enter an aspect as W:H (e.g. 21:9). Height is derived from the current width.",
+            message: "Enter an aspect as W:H (e.g. 21:9).",
             initial: "21:9",
-            preview: { input in
+            segment: (["Keep width", "Keep height"], 0),
+            preview: { input, _, seg in
                 let parts = input.replacingOccurrences(of: " ", with: "").split(separator: ":")
                 guard parts.count == 2, let a = Double(parts[0]), let b = Double(parts[1]), b > 0 else { return nil }
-                let h = UInt32((Double(width) / (a / b)).rounded())
-                return "\(width) × \(h)\(hidpi ? "  ·  @2x" : "")"
-            }) else { return }
+                let f = a / b
+                if seg == 0 {
+                    let h = UInt32((Double(width) / f).rounded())
+                    return "\(width) × \(h)\(hidpi ? "  ·  @2x" : "")"
+                } else {
+                    let w = UInt32((Double(height) * f).rounded())
+                    return "\(w) × \(height)\(hidpi ? "  ·  @2x" : "")"
+                }
+            })
+        guard let s = res.value else { return }
         let parts = s.replacingOccurrences(of: " ", with: "").split(separator: ":")
         guard parts.count == 2, let a = Double(parts[0]), let b = Double(parts[1]), b > 0 else { return }
-        aspect = Geometry.aspectFrom(factor: a / b); apply()
+        let f = a / b
+        aspect = Geometry.aspectFrom(factor: f)
+        if res.segment == 1 { logicalWidth = UInt32((Double(height) * f).rounded()) }
+        apply()
     }
 
     @objc func toggleHiDPI() { hidpi.toggle(); apply() }

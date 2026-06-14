@@ -1,35 +1,54 @@
 import AppKit
 
 /// A small centered modal dialog: an icon (centered, top), a message, a text
-/// field, a live preview line that updates as you type, and OK / Cancel.
+/// field, an optional control (a checkbox or a 2-option segmented switch), a
+/// live preview line that updates as you type or toggle, and OK / Cancel.
 ///
-/// Replaces NSAlert for the custom-input prompts so the icon can be centered
-/// and the user can see the resulting resolution before confirming.
+/// The optional control lets the caller expose a "lock" choice:
+///   - checkbox   : "Lock aspect ratio" on/off (used by Width / Height prompts)
+///   - segmented  : e.g. "Keep width | Keep height" (used by the Aspect prompt)
 final class PromptPanel: NSWindow, NSTextFieldDelegate {
 
     private let field = NSTextField()
     private let previewLabel = NSTextField(labelWithString: "")
-    private var previewBuilder: ((String) -> String?)?
+    private var checkbox: NSButton?
+    private var segmented: NSSegmentedControl?
+    private var previewBuilder: ((String, Bool, Int) -> String?)?
     private var result: String?
 
-    /// Show the panel modally. Returns the entered string on OK, nil on cancel.
-    /// `preview` maps the current input to a human-readable result string, or
-    /// nil while the input is invalid; it updates live as the user types.
+    struct Outcome {
+        let value: String?
+        let checkbox: Bool
+        let segment: Int
+    }
+
+    /// Show the panel modally.
+    /// - `preview` maps (input, checkboxState, segmentIndex) to a result string
+    ///   (or nil while invalid) and is re-evaluated live.
     static func run(title: String,
                     message: String,
                     initial: String,
-                    preview: @escaping (String) -> String?) -> String? {
-        let panel = PromptPanel(title: title, message: message, initial: initial, preview: preview)
+                    checkbox: (label: String, initial: Bool)? = nil,
+                    segment: (options: [String], initial: Int)? = nil,
+                    preview: @escaping (String, Bool, Int) -> String?) -> Outcome {
+        let panel = PromptPanel(title: title, message: message, initial: initial,
+                                checkbox: checkbox, segment: segment, preview: preview)
         NSApp.runModal(for: panel)
         panel.close()
-        return panel.result
+        return Outcome(
+            value: panel.result,
+            checkbox: panel.checkbox.map { $0.state == .on } ?? false,
+            segment: panel.segmented.map { Int($0.selectedSegment) } ?? 0
+        )
     }
 
-    private init(title: String, message: String, initial: String, preview: @escaping (String) -> String?) {
+    private init(title: String, message: String, initial: String,
+                 checkbox cb: (label: String, initial: Bool)?,
+                 segment seg: (options: [String], initial: Int)?,
+                 preview: @escaping (String, Bool, Int) -> String?) {
         self.previewBuilder = preview
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 380, height: 250),
-                   styleMask: [.titled],
-                   backing: .buffered, defer: false)
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 380, height: 290),
+                   styleMask: [.titled], backing: .buffered, defer: false)
         self.title = title
         isReleasedWhenClosed = false
         center()
@@ -38,50 +57,68 @@ final class PromptPanel: NSWindow, NSTextFieldDelegate {
         icon.image = NSImage(systemSymbolName: "display", accessibilityDescription: "macvscr")?
             .withSymbolConfiguration(.init(pointSize: 36, weight: .regular))
         icon.contentTintColor = .controlAccentColor
-        icon.frame = NSRect(x: 168, y: 196, width: 44, height: 44)
+        icon.frame = NSRect(x: 168, y: 236, width: 44, height: 44)
 
         let msg = wrappingLabel(message)
-        msg.frame = NSRect(x: 30, y: 150, width: 320, height: 36)
+        msg.frame = NSRect(x: 30, y: 190, width: 320, height: 36)
 
         field.stringValue = initial
-        field.frame = NSRect(x: 70, y: 112, width: 240, height: 24)
-        field.delegate = self
         field.bezelStyle = .roundedBezel
+        field.delegate = self
+        field.frame = NSRect(x: 70, y: 150, width: 240, height: 24)
+
+        if let cb = cb {
+            let b = NSButton(checkboxWithTitle: cb.label, target: self, action: #selector(changed))
+            b.state = cb.initial ? .on : .off
+            b.sizeToFit()
+            var f = b.frame; f.origin.x = (380 - f.width) / 2; f.origin.y = 108; b.frame = f
+            checkbox = b
+        } else if let seg = seg {
+            let s = NSSegmentedControl()
+            s.segmentCount = seg.options.count
+            for (i, label) in seg.options.enumerated() { s.setLabel(label, forSegment: i) }
+            s.selectedSegment = seg.initial
+            s.target = self
+            s.action = #selector(changed)
+            s.frame = NSRect(x: 90, y: 106, width: 200, height: 24)
+            segmented = s
+        }
 
         previewLabel.alignment = .center
         previewLabel.textColor = .secondaryLabelColor
         previewLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        previewLabel.frame = NSRect(x: 20, y: 80, width: 340, height: 20)
+        previewLabel.frame = NSRect(x: 20, y: 74, width: 340, height: 20)
 
-        let cancel = button("Cancel", action: #selector(cancel), key: "\u{1b}")
+        let cancel = makeButton("Cancel", action: #selector(cancel), key: "\u{1b}")
         cancel.frame = NSRect(x: 196, y: 20, width: 80, height: 26)
-        let ok = button("OK", action: #selector(commit), key: "\r", primary: true)
+        let ok = makeButton("OK", action: #selector(commit), key: "\r", primary: true)
         ok.frame = NSRect(x: 284, y: 20, width: 80, height: 26)
 
-        for v in [icon, msg, field, previewLabel, cancel, ok] { contentView?.addSubview(v) }
+        let cv = contentView!
+        for v in [icon, msg, field, previewLabel, cancel, ok] { cv.addSubview(v) }
+        if let b = checkbox { cv.addSubview(b) }
+        if let s = segmented { cv.addSubview(s) }
         updatePreview()
     }
 
     override func becomeKey() {
         super.becomeKey()
         makeFirstResponder(field)
-        field.currentEditor()?.selectedRange = NSRange(location: 0, length: field.stringValue.count)
+        if let ed = field.currentEditor() {
+            ed.selectedRange = NSRange(location: 0, length: field.stringValue.count)
+        }
     }
 
-    @objc private func commit() {
-        result = field.stringValue
-        NSApp.stopModal(withCode: .OK)
-    }
-    @objc private func cancel() {
-        result = nil
-        NSApp.stopModal(withCode: .cancel)
-    }
-
-    // MARK: live preview
+    @objc private func changed() { updatePreview() }
+    @objc private func commit() { result = field.stringValue; NSApp.stopModal(withCode: .OK) }
+    @objc private func cancel() { result = nil; NSApp.stopModal(withCode: .cancel) }
 
     func controlTextDidChange(_ obj: Notification) { updatePreview() }
+
     private func updatePreview() {
-        let text = previewBuilder?(field.stringValue) ?? "—"
+        let cb = checkbox?.state == .on
+        let seg = segmented.map { Int($0.selectedSegment) } ?? 0
+        let text = previewBuilder?(field.stringValue, cb, seg) ?? "—"
         previewLabel.stringValue = text.isEmpty ? " " : text
     }
 
@@ -102,7 +139,7 @@ final class PromptPanel: NSWindow, NSTextFieldDelegate {
         return l
     }
 
-    private func button(_ title: String, action: Selector, key: String, primary: Bool = false) -> NSButton {
+    private func makeButton(_ title: String, action: Selector, key: String, primary: Bool = false) -> NSButton {
         let b = NSButton(title: title, target: self, action: action)
         b.keyEquivalent = key
         b.bezelStyle = .rounded
