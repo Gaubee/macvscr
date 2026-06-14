@@ -4,11 +4,11 @@ import AppKit
 /// width + aspect + hidpi state (all in LOGICAL pixels). The whole NSMenu is
 /// rebuilt on every change so the headline and checkmarks always reflect reality.
 ///
-/// Linking rule: width is the master axis. {height, aspect} are derived from
-/// each other through the width:
-///   - set width   -> keep aspect, height = width / aspect
-///   - set aspect  -> keep width,  height = width / aspect
-///   - set height  -> keep width,  aspect = width / height (exact, custom)
+/// Linking model (aspect is the lock; either dimension derives the other):
+///   - set width   -> keep aspect, height = width  / aspect
+///   - set height  -> keep aspect, width  = height * aspect
+///   - set aspect  -> keep width,  height = width  / aspect
+/// This keeps the Width and Height submenus symmetric.
 final class TrayController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let display = VirtualDisplay()
@@ -19,7 +19,6 @@ final class TrayController: NSObject {
 
     /// Last successfully applied snapshot (drives the checkmarks).
     private var applied: VirtualDisplayConfig?
-    private static let defaultsKey = "macvscr.lastConfig"
 
     private var logicalHeight: UInt32 { Geometry.height(forWidth: logicalWidth, aspect: aspect) }
     private var physicalWidth: UInt32 { logicalWidth * (hidpi ? 2 : 1) }
@@ -116,8 +115,9 @@ final class TrayController: NSObject {
     private func heightSubmenu() -> NSMenu {
         let m = NSMenu(); m.autoenablesItems = false
         for h in Presets.heights {
+            let w = widthForHeight(h)
             let item = m.addItem(withTitle: "", action: #selector(pickHeight(_:)), keyEquivalent: "")
-            item.attributedTitle = resolutionTitle(logicalWidth, boldWidth: false, h)
+            item.attributedTitle = resolutionTitle(w, boldWidth: false, h)
             item.target = self
             item.representedObject = Int(h)
             if h == logicalHeight { item.state = .on }
@@ -155,6 +155,10 @@ final class TrayController: NSObject {
         return a
     }
 
+    private func widthForHeight(_ h: UInt32) -> UInt32 {
+        UInt32((Double(h) * aspect.factor).rounded())
+    }
+
     private func isActive(logicalW: UInt32, logicalH: UInt32, hidpi: Bool) -> Bool {
         guard let a = applied else { return false }
         return a.logicalWidth == logicalW && a.logicalHeight == logicalH && a.hidpi == hidpi
@@ -177,8 +181,7 @@ final class TrayController: NSObject {
 
     @objc func pickHeight(_ s: NSMenuItem) {
         guard let h = s.representedObject as? Int else { return }
-        // Exact: honor the picked height by using a precise (custom) aspect.
-        aspect = .custom(factor: Double(logicalWidth) / Double(UInt32(h))); apply()
+        logicalWidth = widthForHeight(UInt32(h)); apply()
     }
 
     @objc func pickRatio(_ s: NSMenuItem) {
@@ -187,22 +190,53 @@ final class TrayController: NSObject {
     }
 
     @objc func customWidth() {
-        guard let w = promptUInt32(title: "Custom width",
-                                   message: "Logical pixels; physical = ×2 when HiDPI",
-                                   current: logicalWidth) else { return }
+        let aspect = self.aspect
+        let hidpi = self.hidpi
+        guard let s = PromptPanel.run(
+            title: "Custom width",
+            message: "Enter a width in logical pixels. Height follows the current aspect ratio.",
+            initial: "\(logicalWidth)",
+            preview: { input in
+                guard let w = UInt32(input.trimmingCharacters(in: .whitespaces)) else { return nil }
+                let h = Geometry.height(forWidth: w, aspect: aspect)
+                return "\(w) × \(h)\(hidpi ? "  ·  @2x" : "")"
+            }) else { return }
+        guard let w = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
         logicalWidth = w; apply()
     }
 
     @objc func customHeight() {
-        guard let h = promptUInt32(title: "Custom height",
-                                   message: "Logical pixels; keeps current width, aspect adjusts",
-                                   current: logicalHeight) else { return }
-        aspect = .custom(factor: Double(logicalWidth) / Double(h)); apply()
+        let aspect = self.aspect
+        let hidpi = self.hidpi
+        guard let s = PromptPanel.run(
+            title: "Custom height",
+            message: "Enter a height in logical pixels. Width follows the current aspect ratio.",
+            initial: "\(logicalHeight)",
+            preview: { input in
+                guard let h = UInt32(input.trimmingCharacters(in: .whitespaces)) else { return nil }
+                let w = UInt32((Double(h) * aspect.factor).rounded())
+                return "\(w) × \(h)\(hidpi ? "  ·  @2x" : "")"
+            }) else { return }
+        guard let h = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
+        logicalWidth = UInt32((Double(h) * aspect.factor).rounded()); apply()
     }
 
     @objc func customRatio() {
-        guard let a = promptCustomRatio() else { return }
-        aspect = a; apply()
+        let width = self.logicalWidth
+        let hidpi = self.hidpi
+        guard let s = PromptPanel.run(
+            title: "Custom aspect",
+            message: "Enter an aspect as W:H (e.g. 21:9). Height is derived from the current width.",
+            initial: "21:9",
+            preview: { input in
+                let parts = input.replacingOccurrences(of: " ", with: "").split(separator: ":")
+                guard parts.count == 2, let a = Double(parts[0]), let b = Double(parts[1]), b > 0 else { return nil }
+                let h = UInt32((Double(width) / (a / b)).rounded())
+                return "\(width) × \(h)\(hidpi ? "  ·  @2x" : "")"
+            }) else { return }
+        let parts = s.replacingOccurrences(of: " ", with: "").split(separator: ":")
+        guard parts.count == 2, let a = Double(parts[0]), let b = Double(parts[1]), b > 0 else { return }
+        aspect = Geometry.aspectFrom(factor: a / b); apply()
     }
 
     @objc func toggleHiDPI() { hidpi.toggle(); apply() }
@@ -223,52 +257,8 @@ final class TrayController: NSObject {
         rebuildMenu()
     }
 
-    // MARK: Prompt dialogs (NSAlert + text field)
+    // MARK: Persistence (~/.macvscr/config.json)
 
-    private func promptUInt32(title: String, message: String, current: UInt32) -> UInt32? {
-        let alert = NSAlert()
-        alert.icon = NSImage(systemSymbolName: "display", accessibilityDescription: "macvscr")
-        alert.messageText = title
-        alert.informativeText = message
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        field.stringValue = "\(current)"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        return UInt32(field.stringValue.trimmingCharacters(in: .whitespaces))
-    }
-
-    private func promptCustomRatio() -> Geometry.Aspect? {
-        let alert = NSAlert()
-        alert.icon = NSImage(systemSymbolName: "display", accessibilityDescription: "macvscr")
-        alert.messageText = "Custom aspect"
-        alert.informativeText = "Enter W:H, e.g. 21:9 or 16:10"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        field.stringValue = "21:9"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let parts = field.stringValue.replacingOccurrences(of: " ", with: "").split(separator: ":")
-        guard parts.count == 2, let w = Double(parts[0]), let h = Double(parts[1]), h > 0 else { return nil }
-        return Geometry.aspectFrom(factor: w / h)
-    }
-
-    // MARK: Persistence
-
-    private func persist(_ cfg: VirtualDisplayConfig) {
-        if let data = try? JSONEncoder().encode(cfg) {
-            UserDefaults.standard.set(data, forKey: Self.defaultsKey)
-        }
-    }
-
-    static func loadPersisted() -> VirtualDisplayConfig? {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
-        return try? JSONDecoder().decode(VirtualDisplayConfig.self, from: data)
-    }
+    private func persist(_ cfg: VirtualDisplayConfig) { ConfigStore.save(cfg) }
+    static func loadPersisted() -> VirtualDisplayConfig? { ConfigStore.load() }
 }
