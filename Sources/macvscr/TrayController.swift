@@ -8,7 +8,8 @@ import AppKit
 ///   - set width   -> keep aspect, height = width  / aspect
 ///   - set height  -> keep aspect, width  = height * aspect
 ///   - set aspect  -> keep width,  height = width  / aspect
-/// This keeps the Width and Height submenus symmetric.
+/// Width and Height submenus list the SAME sizes; they differ only in which
+/// dimension is bolded.
 final class TrayController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let display = VirtualDisplay()
@@ -96,35 +97,40 @@ final class TrayController: NSObject {
         return m
     }
 
+    /// Width list: each size with the WIDTH bolded; physical in parens when HiDPI.
     private func widthSubmenu() -> NSMenu {
         let m = NSMenu(); m.autoenablesItems = false
         for w in Presets.widths {
             let h = Geometry.height(forWidth: w, aspect: aspect)
             let item = m.addItem(withTitle: "", action: #selector(pickWidth(_:)), keyEquivalent: "")
-            item.attributedTitle = resolutionTitle(w, boldWidth: true, h)
+            item.attributedTitle = resolutionTitle(w, boldWidth: true, h, hidpi: hidpi)
             item.target = self
             item.representedObject = Int(w)
             if w == logicalWidth { item.state = .on }
         }
-        m.addItem(.separator())
-        let c = m.addItem(withTitle: "Custom…", action: #selector(customWidth), keyEquivalent: "")
-        c.target = self
+        addCustomItem(to: m, action: #selector(customWidth),
+                      isPreset: Presets.widths.contains(logicalWidth),
+                      value: "\(logicalWidth)")
         return m
     }
 
+    /// Height list: the SAME sizes as Width, but the HEIGHT is bolded.
     private func heightSubmenu() -> NSMenu {
         let m = NSMenu(); m.autoenablesItems = false
-        for h in Presets.heights {
-            let w = widthForHeight(h)
+        let heightIsPreset = Presets.widths.contains {
+            Geometry.height(forWidth: $0, aspect: aspect) == logicalHeight
+        }
+        for w in Presets.widths {
+            let h = Geometry.height(forWidth: w, aspect: aspect)
             let item = m.addItem(withTitle: "", action: #selector(pickHeight(_:)), keyEquivalent: "")
-            item.attributedTitle = resolutionTitle(w, boldWidth: false, h)
+            item.attributedTitle = resolutionTitle(w, boldWidth: false, h, hidpi: hidpi)
             item.target = self
             item.representedObject = Int(h)
             if h == logicalHeight { item.state = .on }
         }
-        m.addItem(.separator())
-        let c = m.addItem(withTitle: "Custom…", action: #selector(customHeight), keyEquivalent: "")
-        c.target = self
+        addCustomItem(to: m, action: #selector(customHeight),
+                      isPreset: heightIsPreset,
+                      value: "\(logicalHeight)")
         return m
     }
 
@@ -138,21 +144,39 @@ final class TrayController: NSObject {
             item.representedObject = r.rawValue
             if case .standard(let cur) = aspect, cur == r { item.state = .on }
         }
-        m.addItem(.separator())
-        let c = m.addItem(withTitle: "Custom…", action: #selector(customRatio), keyEquivalent: "")
-        c.target = self
+        let isStandard: Bool
+        if case .standard = aspect { isStandard = true } else { isStandard = false }
+        addCustomItem(to: m, action: #selector(customRatio),
+                      isPreset: isStandard,
+                      value: isStandard ? "" : String(format: "%.2f", aspect.factor))
         return m
     }
 
-    /// "W × H" with the picked dimension bolded (for the Width/Height submenus).
-    private func resolutionTitle(_ w: UInt32, boldWidth: Bool, _ h: UInt32) -> NSAttributedString {
+    /// "W × H" with the picked dimension bolded; physical resolution in dim
+    /// parentheses when HiDPI is on.
+    private func resolutionTitle(_ w: UInt32, boldWidth: Bool, _ h: UInt32, hidpi: Bool) -> NSAttributedString {
         let base = NSFont.menuFont(ofSize: 0)
         let bold = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
         let a = NSMutableAttributedString()
         a.append(NSAttributedString(string: "\(w)", attributes: [.font: boldWidth ? bold : base]))
         a.append(NSAttributedString(string: " × ", attributes: [.font: base]))
         a.append(NSAttributedString(string: "\(h)", attributes: [.font: boldWidth ? base : bold]))
+        if hidpi {
+            a.append(NSAttributedString(
+                string: "  (\(w * 2)×\(h * 2))",
+                attributes: [.font: base, .foregroundColor: NSColor.secondaryLabelColor]))
+        }
         return a
+    }
+
+    /// Appends the trailing "Custom…" item. When the current value is not one of
+    /// the presets, it is checked and shows the value: "Custom: 3000".
+    private func addCustomItem(to menu: NSMenu, action: Selector, isPreset: Bool, value: String) {
+        menu.addItem(.separator())
+        let title = isPreset ? "Custom…" : (value.isEmpty ? "Custom" : "Custom: \(value)")
+        let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        item.target = self
+        if !isPreset { item.state = .on }
     }
 
     private func widthForHeight(_ h: UInt32) -> UInt32 {
