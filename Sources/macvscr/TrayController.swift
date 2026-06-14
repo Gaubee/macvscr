@@ -229,7 +229,7 @@ final class TrayController: NSObject {
             })
         guard let s = res.value, let w = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
         logicalWidth = w
-        if !res.checkbox { aspect = Geometry.aspectFrom(width: w, height: oldHeight) }
+        if !res.checkbox { self.aspect = Geometry.aspectFrom(width: w, height: oldHeight) }
         apply()
     }
 
@@ -251,7 +251,7 @@ final class TrayController: NSObject {
         if res.checkbox {
             logicalWidth = UInt32((Double(h) * aspect.factor).rounded())
         } else {
-            aspect = Geometry.aspectFrom(width: oldWidth, height: h)
+            self.aspect = Geometry.aspectFrom(width: oldWidth, height: h)
         }
         apply()
     }
