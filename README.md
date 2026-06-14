@@ -4,6 +4,8 @@ A macOS menu-bar tool that creates **controllable virtual displays** — arbitra
 
 [简体中文](README.zh-CN.md) · npm: **[macvscr](https://www.npmjs.com/package/macvscr)** · command: `macvscr`
 
+![macvscr tray menu — logical resolution with the HiDPI physical size in parentheses](https://raw.githubusercontent.com/Gaubee/macvscr/main/screenshot/menu.png)
+
 ## Install
 
 ```bash

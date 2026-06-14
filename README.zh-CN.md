@@ -6,6 +6,8 @@
 
 npm 包：**[macvscr](https://www.npmjs.com/package/macvscr)** · 命令：`macvscr`
 
+![macvscr 托盘菜单](https://raw.githubusercontent.com/Gaubee/macvscr/main/screenshot/menu.png)
+
 ## 安装
 
 ```bash

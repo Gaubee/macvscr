@@ -2,6 +2,8 @@
 
 A macOS menu-bar tool that creates **controllable virtual displays** — arbitrary resolution, HiDPI (Retina `@2x`), aspect ratio, and iMac presets. It unblocks HiDPI screen-sharing on headless Macs (e.g. a Mac mini with no monitor attached), where the session is otherwise locked to 1920×1080 non-HiDPI.
 
+![macvscr tray menu](https://raw.githubusercontent.com/Gaubee/macvscr/main/screenshot/menu.png)
+
 ## Install
 
 ```bash
