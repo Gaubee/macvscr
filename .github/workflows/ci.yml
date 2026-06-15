@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-26 # Xcode 26 + macOS 26 SDK required for Liquid Glass APIs
     steps:
       - uses: actions/checkout@v4
       - name: Build (arm64, release)
