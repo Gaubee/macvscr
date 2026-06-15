@@ -40,7 +40,21 @@ final class TrayController: NSObject {
             persist(initial)
         }
         rebuildMenu()
+
+        // Keep the tray in sync with user-managed presets, and expose the live
+        // config + apply path to the management window.
+        NotificationCenter.default.addObserver(self, selector: #selector(presetsChanged),
+                                               name: PresetStore.didChangeNotification, object: nil)
+        let mgr = PresetManagerWindowController.shared
+        mgr.liveConfigProvider = { [weak self] in
+            self?.currentLiveConfig() ?? (width: 3440, height: 1440, hidpi: true)
+        }
+        mgr.applyHandler = { [weak self] preset in
+            self?.applyCustomPresetFromWindow(preset)
+        }
     }
+
+    @objc private func presetsChanged() { rebuildMenu() }
 
     // MARK: Menu
 
@@ -93,6 +107,29 @@ final class TrayController: NSObject {
             if isActive(logicalW: p.logicalWidth, logicalH: p.logicalHeight, hidpi: p.hidpi) {
                 item.state = .on
             }
+        }
+
+        // Custom presets section
+        let customs = PresetStore.shared.presets
+        m.addItem(.separator())
+        let header = m.addItem(withTitle: "— Custom —", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        if customs.isEmpty {
+            let add = m.addItem(withTitle: "Add Custom Preset…", action: #selector(addCustomPreset), keyEquivalent: "")
+            add.target = self
+            add.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        } else {
+            for c in customs {
+                let item = m.addItem(withTitle: c.menuLabel, action: #selector(applyCustomPreset(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = c.id.uuidString
+                if isActive(logicalW: c.logicalWidth, logicalH: c.logicalHeight, hidpi: c.hidpi) {
+                    item.state = .on
+                }
+            }
+            let manage = m.addItem(withTitle: "Manage Custom Presets…", action: #selector(manageCustomPresets), keyEquivalent: "")
+            manage.target = self
+            manage.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: nil)
         }
         return m
     }
@@ -200,6 +237,43 @@ final class TrayController: NSObject {
 
     @objc func applyPreset(_ s: NSMenuItem) {
         guard let key = s.representedObject as? String, let p = Presets.find(key: key) else { return }
+        logicalWidth = p.logicalWidth
+        aspect = Geometry.aspectFrom(width: p.logicalWidth, height: p.logicalHeight)
+        hidpi = p.hidpi
+        apply()
+    }
+
+    @objc func applyCustomPreset(_ s: NSMenuItem) {
+        guard let idStr = s.representedObject as? String,
+              let id = UUID(uuidString: idStr),
+              let c = PresetStore.shared.find(id: id) else { return }
+        logicalWidth = c.logicalWidth
+        aspect = Geometry.aspectFrom(width: c.logicalWidth, height: c.logicalHeight)
+        hidpi = c.hidpi
+        apply()
+    }
+
+    @objc func manageCustomPresets() {
+        PresetManagerWindowController.shared.show()
+    }
+
+    @objc func addCustomPreset() {
+        let live = currentLiveConfig()
+        let p = CustomPreset(name: "New Preset",
+                             logicalWidth: live.width,
+                             logicalHeight: live.height,
+                             hidpi: live.hidpi)
+        let idx = PresetStore.shared.add(p)
+        PresetManagerWindowController.shared.selectAndEdit(index: idx)
+    }
+
+    /// Snapshot of the currently-applied geometry (defaults for new presets).
+    func currentLiveConfig() -> (width: UInt32, height: UInt32, hidpi: Bool) {
+        (logicalWidth, logicalHeight, hidpi)
+    }
+
+    /// Apply a preset to the live display from the management window.
+    func applyCustomPresetFromWindow(_ p: CustomPreset) {
         logicalWidth = p.logicalWidth
         aspect = Geometry.aspectFrom(width: p.logicalWidth, height: p.logicalHeight)
         hidpi = p.hidpi

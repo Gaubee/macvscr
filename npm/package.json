@@ -1,6 +1,6 @@
 {
   "name": "macvscr",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "macOS menu-bar tool that creates controllable virtual displays — arbitrary resolution, HiDPI, aspect ratio, and iMac presets. Unblocks HiDPI screen-sharing on headless Macs.",
   "bin": {
     "macvscr": "bin/macvscr.js"
