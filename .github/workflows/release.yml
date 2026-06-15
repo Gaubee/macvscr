@@ -24,7 +24,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+        # NOTE: no `registry-url` / no NODE_AUTH_TOKEN — Trusted Publishing
+        # authenticates purely via the job's `id-token: write` permission
+        # (OIDC). Setting a classic token here makes npm skip the OIDC path
+        # and fail with a misleading E404.
 
       - name: Upgrade npm (Trusted Publishing needs npm ≥ 11.5.1)
         run: npm install -g npm@latest
