@@ -70,4 +70,14 @@ public enum Geometry {
         }
         return .custom(factor: factor)
     }
+
+    /// A width×height pair reduced to its smallest integer W:H ratio (e.g.
+    /// 3440×1440 → "43:18"). Shared by the tray's Aspect "Custom…" item and by
+    /// the preset-manager detail preview.
+    public static func reducedRatio(width: UInt32, height: UInt32) -> String {
+        func gcd(_ a: UInt32, _ b: UInt32) -> UInt32 { b == 0 ? a : gcd(b, a % b) }
+        guard height > 0, width > 0 else { return "—" }
+        let d = gcd(width, height)
+        return "\(width / d):\(height / d)"
+    }
 }

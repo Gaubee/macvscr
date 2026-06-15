@@ -1,23 +1,29 @@
 import Foundation
+import Combine
 
-/// Singleton store of user-defined presets, persisted to ~/.macvscr/presets.json
-/// (reuses ConfigStore's directory + atomic-write pattern). Posts
-/// `didChangeNotification` after every mutation so the tray menu and the
-/// management window's source list can rebuild.
-final class PresetStore {
-    static let shared = PresetStore()
+/// Observable, persisted collection of user-defined custom presets.
+///
+/// This is the single source of truth for the management window's SwiftUI view
+/// (an `ObservableObject`) AND for the tray menu: every mutation persists to
+/// `~/.macvscr/presets.json`, publishes to SwiftUI, and posts
+/// `didChangeNotification` so `TrayController` can rebuild its Custom section
+/// even while the menu is closed.
+final class PresetLibrary: ObservableObject {
+
+    /// Posted after every mutation (observed by `TrayController`).
     static let didChangeNotification = Notification.Name("macvscr.PresetStoreDidChange")
 
-    private(set) var presets: [CustomPreset] = []
+    @Published private(set) var presets: [CustomPreset] = []
 
     private static var directoryURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".macvscr", isDirectory: true)
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".macvscr", isDirectory: true)
     }
     private static var fileURL: URL {
         directoryURL.appendingPathComponent("presets.json")
     }
 
-    private init() { load() }
+    init() { load() }
 
     // MARK: Load / save
 
@@ -27,7 +33,7 @@ final class PresetStore {
         presets = (try? JSONDecoder().decode([CustomPreset].self, from: data)) ?? []
     }
 
-    private func save() {
+    private func persist() {
         try? FileManager.default.createDirectory(at: Self.directoryURL, withIntermediateDirectories: true)
         guard let data = try? JSONEncoder().encode(presets) else { return }
         try? data.write(to: Self.fileURL, options: .atomic)
@@ -36,30 +42,28 @@ final class PresetStore {
 
     // MARK: Mutations
 
+    /// Append a preset; returns the new preset so callers can select it.
     @discardableResult
-    func add(_ p: CustomPreset) -> Int {
+    func append(_ p: CustomPreset) -> CustomPreset {
         presets.append(p)
-        save()
-        return presets.count - 1
+        persist()
+        return p
     }
 
+    /// Replace the preset with the same id, preserving list order.
     func update(_ p: CustomPreset) {
         guard let i = presets.firstIndex(where: { $0.id == p.id }) else { return }
         presets[i] = p
-        save()
-    }
-
-    func remove(at index: Int) {
-        guard presets.indices.contains(index) else { return }
-        presets.remove(at: index)
-        save()
+        persist()
     }
 
     func remove(id: UUID) {
         presets.removeAll { $0.id == id }
-        save()
+        persist()
     }
 
+    // MARK: Lookup
+
     func find(id: UUID) -> CustomPreset? { presets.first { $0.id == id } }
-    func findIndex(id: UUID) -> Int? { presets.firstIndex { $0.id == id } }
+    func contains(id: UUID) -> Bool { presets.contains { $0.id == id } }
 }

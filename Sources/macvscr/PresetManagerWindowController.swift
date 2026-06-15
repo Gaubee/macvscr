@@ -1,111 +1,88 @@
 import AppKit
+import SwiftUI
 
-/// Two-column split: sidebar (`.sidebar` behavior ⇒ sidebar vibrancy material,
-/// automatic) + detail. Lives as the window's contentViewController, so with
-/// `.fullSizeContentView` + transparent titlebar the sidebar/titlebar/content
-/// materials line up seamlessly.
-final class PresetSplitViewController: NSSplitViewController {
-    init(source: NSViewController, detail: NSViewController) {
-        super.init(nibName: nil, bundle: nil)
-        let sidebar = NSSplitViewItem(sidebarWithViewController: source)
-        sidebar.canCollapse = false
-        sidebar.minimumThickness = 200
-        sidebar.maximumThickness = 260
-        addSplitViewItem(sidebar)
-        let detailItem = NSSplitViewItem(viewController: detail)
-        detailItem.minimumThickness = 360
-        addSplitViewItem(detailItem)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-}
-
-/// Singleton owner of the non-modal "Custom Presets" management window.
-/// `TrayController` supplies `liveConfigProvider` (defaults for Add) and
-/// `applyHandler` (Apply Now). Reopen focuses the existing window.
+/// Non-modal owner of the "Custom Presets" management window.
+///
+/// A real macOS document-style window, not a half-built panel:
+///   - `[.titled, .resizable, .fullSizeContentView, .closable, .miniaturizable]`
+///   - transparent titlebar + hidden title → content flows under the toolbar
+///   - the SwiftUI content (a `NavigationSplitView`) provides the sidebar's
+///     `.sidebar` vibrancy and the detail pane's translucent material
+///     automatically; the window toolbar gets its own `.unified` material.
+///   - hosted via `NSHostingController`, non-modal (`showWindow`, not runModal)
+///     so the tray keeps working while it is open.
+///
+/// `TrayController` owns the single instance and supplies:
+///   - `library`         — the shared `PresetLibrary` (source of truth)
+///   - `liveConfig`      — snapshot of the running display (defaults for Add)
+///   - `apply`           — reconfigure the live display to a preset
 final class PresetManagerWindowController: NSWindowController {
 
-    static let shared = PresetManagerWindowController()
+    private let library: PresetLibrary
+    private let liveConfig: () -> (width: UInt32, height: UInt32, hidpi: Bool)
+    private let apply: (CustomPreset) -> Void
+    private let save: (CustomPreset) -> Void
+    private let confirm: (CustomPreset) -> Void
+    private let revert: () -> Void
+    private let preview: PreviewState
 
-    /// Defaults a new preset to whatever the display is currently running.
-    var liveConfigProvider: (() -> (width: UInt32, height: UInt32, hidpi: Bool))?
-    /// Applies a preset to the live display (window stays open).
-    var applyHandler: ((CustomPreset) -> Void)?
-
-    private let sourceVC: PresetSourceListViewController
-    private let editorVC: PresetEditorViewController
-
-    private init() {
-        let source = PresetSourceListViewController()
-        let editor = PresetEditorViewController()
-        let split = PresetSplitViewController(source: source, detail: editor)
-        sourceVC = source
-        editorVC = editor
+    init(library: PresetLibrary,
+         preview: PreviewState,
+         liveConfig: @escaping () -> (width: UInt32, height: UInt32, hidpi: Bool),
+         apply: @escaping (CustomPreset) -> Void,
+         save: @escaping (CustomPreset) -> Void,
+         confirm: @escaping (CustomPreset) -> Void,
+         revert: @escaping () -> Void) {
+        self.library = library
+        self.preview = preview
+        self.liveConfig = liveConfig
+        self.apply = apply
+        self.save = save
+        self.confirm = confirm
+        self.revert = revert
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 480),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
-        window.contentViewController = split
         window.title = "Custom Presets"
         window.titlebarAppearsTransparent = true
-        window.titleVisibility = .visible
+        window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 560, height: 360)
         window.center()
-
+        window.minSize = NSSize(width: 680, height: 420)
+        window.setFrameAutosaveName("macvscr.presetManager")
+        // Toolbar (its own material, distinct from the sidebar vibrancy).
         let toolbar = NSToolbar(identifier: "macvscr.presetManager")
         toolbar.displayMode = .iconAndLabel
         window.toolbar = toolbar
+        // Keep vibrancy following the system appearance.
+        window.appearance = nil
+
+        let view = PresetManagerView(library: library,
+                                     preview: preview,
+                                     liveConfig: liveConfig,
+                                     onApply: apply,
+                                     onSave: save,
+                                     onConfirm: confirm,
+                                     onRevert: revert)
+        let hosting = NSHostingController(rootView: view)
+        window.contentViewController = hosting
 
         super.init(window: window)
-
-        // Sidebar → editor binding
-        sourceVC.onSelectionChange = { [weak self] index in
-            let preset = index.flatMap { PresetStore.shared.presets[$0] }
-            self?.editorVC.show(preset: preset)
-        }
-        sourceVC.onAdd = { [weak self] in self?.addFromWindow() }
-        sourceVC.onRemove = { index in PresetStore.shared.remove(at: index) }
-
-        // Editor → store (live) + Apply Now → tray
-        editorVC.onChange = { preset in PresetStore.shared.update(preset) }
-        editorVC.onApplyNow = { [weak self] preset in self?.applyHandler?(preset) }
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     // MARK: Show / focus (non-modal; coexists with the .accessory tray app)
 
-    func show() {
+    func present() {
         NSApp.activate(ignoringOtherApps: true)
-        if let w = window, w.isVisible {
-            w.makeKeyAndOrderFront(nil)
+        if window?.isVisible == true {
+            window?.makeKeyAndOrderFront(nil)
         } else {
             showWindow(nil)
             window?.makeKeyAndOrderFront(nil)
         }
-        // If nothing is selected and there are presets, pick the first row.
-        if sourceVC.selectedRow < 0, !PresetStore.shared.presets.isEmpty {
-            sourceVC.selectRow(index: 0)
-        }
-    }
-
-    /// Used by "Add Custom Preset…" from the tray: create from the live config,
-    /// then select + focus it for editing.
-    func selectAndEdit(index: Int) {
-        show()
-        sourceVC.selectRow(index: index)
-    }
-
-    // MARK: Add
-
-    private func addFromWindow() {
-        let live = liveConfigProvider?() ?? (width: 3440 as UInt32, height: 1440 as UInt32, hidpi: true)
-        let p = CustomPreset(name: "New Preset",
-                             logicalWidth: live.width,
-                             logicalHeight: live.height,
-                             hidpi: live.hidpi)
-        let idx = PresetStore.shared.add(p)
-        sourceVC.selectRow(index: idx)
     }
 }

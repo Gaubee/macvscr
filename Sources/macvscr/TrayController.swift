@@ -14,12 +14,20 @@ final class TrayController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let display = VirtualDisplay()
 
+    /// User-defined presets (~/.macvscr/presets.json). Single source of truth
+    /// shared with the management window.
+    private let library = PresetLibrary()
+    private var manager: PresetManagerWindowController?
+
     private var logicalWidth: UInt32 = 3440
     private var aspect: Geometry.Aspect = .standard(.w21x9)
     private var hidpi = true
 
-    /// Last successfully applied snapshot (drives the checkmarks).
+    /// Last successfully applied (committed) snapshot (drives the checkmarks).
     private var applied: VirtualDisplayConfig?
+
+    /// Global preview state (10s auto-revert). Shared with the management window.
+    let preview = PreviewState.shared
 
     private var logicalHeight: UInt32 { Geometry.height(forWidth: logicalWidth, aspect: aspect) }
     private var physicalWidth: UInt32 { logicalWidth * (hidpi ? 2 : 1) }
@@ -44,14 +52,21 @@ final class TrayController: NSObject {
         // Keep the tray in sync with user-managed presets, and expose the live
         // config + apply path to the management window.
         NotificationCenter.default.addObserver(self, selector: #selector(presetsChanged),
-                                               name: PresetStore.didChangeNotification, object: nil)
-        let mgr = PresetManagerWindowController.shared
-        mgr.liveConfigProvider = { [weak self] in
-            self?.currentLiveConfig() ?? (width: 3440, height: 1440, hidpi: true)
-        }
-        mgr.applyHandler = { [weak self] preset in
-            self?.applyCustomPresetFromWindow(preset)
-        }
+                                               name: PresetLibrary.didChangeNotification, object: nil)
+        manager = PresetManagerWindowController(
+            library: library,
+            preview: preview,
+            liveConfig: { [weak self] in
+                self?.currentLiveConfig() ?? (width: 3440, height: 1440, hidpi: true)
+            },
+            apply: { [weak self] preset in self?.startPreview(preset) },
+            save: { [weak self] preset in self?.library.update(preset) },
+            confirm: { [weak self] preset in
+                guard let self else { return }
+                self.library.update(preset)
+                self.commitPreview(preset)
+            },
+            revert: { [weak self] in self?.revertPreview() })
     }
 
     @objc private func presetsChanged() { rebuildMenu() }
@@ -110,12 +125,12 @@ final class TrayController: NSObject {
         }
 
         // Custom presets section
-        let customs = PresetStore.shared.presets
+        let customs = library.presets
         m.addItem(.separator())
-        let header = m.addItem(withTitle: "— Custom —", action: nil, keyEquivalent: "")
+        let header = m.addItem(withTitle: "Custom", action: nil, keyEquivalent: "")
         header.isEnabled = false
         if customs.isEmpty {
-            let add = m.addItem(withTitle: "Add Custom Preset…", action: #selector(addCustomPreset), keyEquivalent: "")
+            let add = m.addItem(withTitle: "Add Custom Presets…", action: #selector(manageCustomPresets), keyEquivalent: "")
             add.target = self
             add.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
         } else {
@@ -223,9 +238,7 @@ final class TrayController: NSObject {
     /// Current resolution as a reduced W:H ratio string (e.g. "43:18"), shown in
     /// the Aspect submenu's Custom item when the aspect isn't a standard ratio.
     private func reducedRatio() -> String {
-        func gcd(_ a: UInt32, _ b: UInt32) -> UInt32 { b == 0 ? a : gcd(b, a % b) }
-        let d = gcd(logicalWidth, logicalHeight)
-        return "\(logicalWidth / d):\(logicalHeight / d)"
+        Geometry.reducedRatio(width: logicalWidth, height: logicalHeight)
     }
 
     private func isActive(logicalW: UInt32, logicalH: UInt32, hidpi: Bool) -> Bool {
@@ -246,38 +259,17 @@ final class TrayController: NSObject {
     @objc func applyCustomPreset(_ s: NSMenuItem) {
         guard let idStr = s.representedObject as? String,
               let id = UUID(uuidString: idStr),
-              let c = PresetStore.shared.find(id: id) else { return }
-        logicalWidth = c.logicalWidth
-        aspect = Geometry.aspectFrom(width: c.logicalWidth, height: c.logicalHeight)
-        hidpi = c.hidpi
-        apply()
+              let c = library.find(id: id) else { return }
+        commitPreview(c) // tray selection = committed, not a timed preview
     }
 
     @objc func manageCustomPresets() {
-        PresetManagerWindowController.shared.show()
-    }
-
-    @objc func addCustomPreset() {
-        let live = currentLiveConfig()
-        let p = CustomPreset(name: "New Preset",
-                             logicalWidth: live.width,
-                             logicalHeight: live.height,
-                             hidpi: live.hidpi)
-        let idx = PresetStore.shared.add(p)
-        PresetManagerWindowController.shared.selectAndEdit(index: idx)
+        manager?.present()
     }
 
     /// Snapshot of the currently-applied geometry (defaults for new presets).
     func currentLiveConfig() -> (width: UInt32, height: UInt32, hidpi: Bool) {
         (logicalWidth, logicalHeight, hidpi)
-    }
-
-    /// Apply a preset to the live display from the management window.
-    func applyCustomPresetFromWindow(_ p: CustomPreset) {
-        logicalWidth = p.logicalWidth
-        aspect = Geometry.aspectFrom(width: p.logicalWidth, height: p.logicalHeight)
-        hidpi = p.hidpi
-        apply()
     }
 
     @objc func pickWidth(_ s: NSMenuItem) {
@@ -384,6 +376,41 @@ final class TrayController: NSObject {
             persist(cfg)
         }
         rebuildMenu()
+    }
+
+    // MARK: Preview (10s auto-revert, driven from the management window)
+
+    /// Begin / refresh a preview of `p` on the live display. Does NOT persist
+    /// and does NOT change the committed config — `applied` is preserved so the
+    /// timer can restore it. Re-arming resets the countdown.
+    func startPreview(_ p: CustomPreset) {
+        preview.active = p
+        let cfg = VirtualDisplayConfig(logicalWidth: p.logicalWidth,
+                                       logicalHeight: p.logicalHeight,
+                                       hidpi: p.hidpi,
+                                       name: "Virtual Display")
+        _ = display.reconfigure(cfg)
+        rebuildMenu()
+        preview.arm(onExpire: { [weak self] in self?.revertPreview() },
+                    onTick:    { [weak self] in self?.preview.objectWillChange.send() })
+    }
+
+    /// Revert to the last committed config (timer expiry, or a failed preview).
+    func revertPreview() {
+        guard let cfg = applied else { preview.clear(); rebuildMenu(); return }
+        _ = display.reconfigure(cfg)
+        preview.clear()
+        rebuildMenu()
+    }
+
+    /// Commit the currently-previewed preset (or a given one) as the new
+    /// committed config: stops the timer, updates `applied` + persistence.
+    func commitPreview(_ p: CustomPreset) {
+        logicalWidth = p.logicalWidth
+        aspect = Geometry.aspectFrom(width: p.logicalWidth, height: p.logicalHeight)
+        hidpi = p.hidpi
+        preview.clear()
+        apply()
     }
 
     // MARK: Persistence (~/.macvscr/config.json)
