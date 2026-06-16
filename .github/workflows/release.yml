@@ -49,4 +49,13 @@ jobs:
 
       - name: Publish to npm (trusted publishing + provenance)
         working-directory: npm
-        run: npm publish --provenance --access public
+        # Unset NODE_AUTH_TOKEN and rewrite the .npmrc without any classic
+        # auth line, so npm falls back to the OIDC trusted-publisher path
+        # (the job has `id-token: write`). A lingering classic token makes
+        # npm skip OIDC and fail with a misleading E404 / ENEEDAUTH.
+        env:
+          NODE_AUTH_TOKEN: ""
+        run: |
+          npm config delete "//registry.npmjs.org/:_authToken" || true
+          npm config delete "always-auth" || true
+          npm publish --provenance --access public
