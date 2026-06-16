@@ -7,23 +7,23 @@ import Combine
 ///
 /// Owned by `TrayController`, which mutates it. Observable so the management
 /// window (SwiftUI) can show the live countdown / "Previewing…" indicator.
-final class PreviewState: ObservableObject {
+public final class PreviewState: ObservableObject {
 
-    static let shared = PreviewState()
+    public static let shared = PreviewState()
 
     /// Default preview window before auto-reverting to the committed config.
-    static let defaultDuration: TimeInterval = 10
+    public static let defaultDuration: TimeInterval = 10
 
     /// What's currently being previewed, if anything. Mutating `active` does
     /// NOT, by itself, reconfigure the display — callers go through
     /// `TrayController.startPreview`, which sets this and arms the timer.
-    @Published var active: CustomPreset?
+    @Published public var active: CustomPreset?
 
     /// Wall-clock time the current preview began (for countdown display).
-    @Published private(set) var startedAt: Date?
+    @Published private(set) public var startedAt: Date?
 
     /// How long the preview lasts before auto-reverting.
-    @Published private(set) var duration: TimeInterval = defaultDuration
+    @Published private(set) public var duration: TimeInterval = defaultDuration
 
     private var timer: DispatchSourceTimer?
     private var tickTimer: DispatchSourceTimer?
@@ -34,7 +34,7 @@ final class PreviewState: ObservableObject {
 
     /// (Re)arm the preview timer. On expiry, `onExpire` is fired once. The
     /// 1Hz `onTick` is for live countdown UI.
-    func arm(duration: TimeInterval = defaultDuration,
+    public func arm(duration: TimeInterval = defaultDuration,
              onExpire: @escaping () -> Void,
              onTick: @escaping () -> Void) {
         cancelTimer()
@@ -56,14 +56,14 @@ final class PreviewState: ObservableObject {
     }
 
     /// Clear the preview and stop any timer. Does NOT touch the display.
-    func clear() {
+    public func clear() {
         cancelTimer()
         active = nil
         startedAt = nil
     }
 
     /// Seconds remaining in the current preview (clamped ≥ 0); nil if inactive.
-    var secondsRemaining: Int? {
+    public var secondsRemaining: Int? {
         guard let start = startedAt else { return nil }
         return max(0, Int(duration - Date().timeIntervalSince(start)))
     }

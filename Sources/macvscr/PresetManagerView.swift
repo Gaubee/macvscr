@@ -1,3 +1,4 @@
+import macvscrCore
 import AppKit
 import SwiftUI
 
@@ -188,7 +189,7 @@ struct PresetManagerView: View {
 
     @ObservedObject var library: PresetLibrary
     @ObservedObject var preview: PreviewState
-    let liveConfig: () -> (width: UInt32, height: UInt32, hidpi: Bool)
+    let liveConfig: () -> (width: UInt32, height: UInt32, hidpi: Bool, dpiPercent: Int?)
 
     let onApply: (CustomPreset) -> Void
     let onSave: (CustomPreset) -> Void
@@ -303,7 +304,8 @@ struct PresetManagerView: View {
             name: nextDefaultName(),
             logicalWidth: live.width,
             logicalHeight: live.height,
-            hidpi: live.hidpi)
+            hidpi: live.hidpi,
+            dpiPercent: live.dpiPercent)
         library.append(p)
         selectedID = p.id
     }
@@ -355,19 +357,18 @@ private struct PresetDetailView: View {
     let onConfirm: (CustomPreset) -> Void
     let onRevert: () -> Void
 
-    @State private var edit: CustomPreset?
+    @StateObject private var editor = PresetEditorModel()
     @State private var saveFlash = false
+    @State private var keepWidth = true
 
-    // Namespace: 用于 iOS 26+ 的 Liquid Glass Morphing 动画过渡
     @Namespace private var headerGlassNamespace
 
-    private var isDirty: Bool { edit != libraryPreset }
-    private var current: CustomPreset { edit ?? libraryPreset }
+    private var isDirty: Bool { editor.differs(from: libraryPreset) }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                MonitorPreview(preset: current)
+                MonitorPreview(preset: editor.snapshot())
                     .padding(.vertical, 24)
                 form
             }
@@ -378,17 +379,15 @@ private struct PresetDetailView: View {
                 .background(ProgressiveGlassBackground(overhang: 120))
         }
         .navigationSubtitle(subtitle)
-        .onAppear { if edit == nil { edit = libraryPreset } }
-        .onChange(of: libraryPreset) { newLib in
-            edit = newLib
-        }
+        .onAppear { editor.load(libraryPreset) }
+        .onChange(of: libraryPreset) { newLib in editor.load(newLib) }
     }
 
     private var subtitle: String {
-        if preview.active?.id == current.id, let n = preview.secondsRemaining {
+        if preview.active?.id == editor.id, let n = preview.secondsRemaining {
             return "Previewing · reverts in \(n)s"
         }
-        return current.resolutionLabel
+        return editor.resolutionLabel
     }
 
     // MARK: Header
@@ -397,8 +396,8 @@ private struct PresetDetailView: View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(
-                    current.name.trimmingCharacters(in: .whitespaces).isEmpty
-                        ? "Untitled Preset" : current.name
+                    editor.name.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? "Untitled Preset" : editor.name
                 )
                 .font(.title2).fontWeight(.bold)
 
@@ -407,7 +406,6 @@ private struct PresetDetailView: View {
             }
             Spacer(minLength: 12)
 
-            // 使用 GlassEffectContainer 将头部的一组液态玻璃按钮融为一体
             if #available(macOS 26.0, iOS 26.0, *) {
                 GlassEffectContainer(spacing: 12) {
                     actionButtonsHStack
@@ -422,9 +420,9 @@ private struct PresetDetailView: View {
     }
 
     private var headerSubtitleLine: String {
-        var bits = ["Logical \(current.logicalWidth)×\(current.logicalHeight)"]
-        bits.append(current.hidpi ? "Retina @2x" : "Standard")
-        if let r = preview.secondsRemaining, preview.active?.id == current.id {
+        var bits = ["Logical \(editor.logicalWidth)×\(editor.logicalHeight)"]
+        bits.append(editor.hidpi ? "Retina " + editor.densitySuffix : "Standard")
+        if let r = preview.secondsRemaining, preview.active?.id == editor.id {
             bits.append("Previewing · \(r)s")
         }
         return bits.joined(separator: "  ·  ")
@@ -432,11 +430,12 @@ private struct PresetDetailView: View {
 
     @ViewBuilder
     private var actionButtonsHStack: some View {
-        let isPreviewing = preview.active?.id == current.id
+        let isPreviewing = preview.active?.id == editor.id
+        let snapshot = editor.snapshot()
         HStack(spacing: 12) {
 
             Button {
-                onSave(current)
+                onSave(snapshot)
                 withAnimation(.easeOut(duration: 0.25)) { saveFlash = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     withAnimation(.easeInOut(duration: 0.6)) { saveFlash = false }
@@ -481,7 +480,7 @@ private struct PresetDetailView: View {
                 .transition(.opacity.combined(with: .scale))
 
                 Button {
-                    onConfirm(current)
+                    onConfirm(snapshot)
                 } label: {
                     Label("Confirm", systemImage: "checkmark.circle.fill")
                 }
@@ -498,7 +497,7 @@ private struct PresetDetailView: View {
                 .transition(.opacity.combined(with: .scale))
             } else {
                 Button {
-                    onApply(current)
+                    onApply(snapshot)
                 } label: {
                     Label("Apply", systemImage: "play.fill")
                 }
@@ -526,7 +525,7 @@ private struct PresetDetailView: View {
     private var form: some View {
         Form {
             Section {
-                TextField("Name", text: nameBinding)
+                TextField("Name", text: $editor.name)
             } header: {
                 Text("Name")
             } footer: {
@@ -537,32 +536,50 @@ private struct PresetDetailView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Width").font(.caption).foregroundStyle(.secondary)
-                        TextField("Width", value: widthBinding, format: .number)
+                        TextField("Width", value: Binding(
+                            get: { editor.logicalWidth },
+                            set: { editor.setWidth($0) }
+                        ), format: .number)
                             .textFieldStyle(.roundedBorder)
-                            .help(lockAspect ? "Height follows aspect" : "")
+                            .help(editor.lockAspect ? "Height follows aspect" : "")
                     }
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Height").font(.caption).foregroundStyle(.secondary)
-                        TextField("Height", value: heightBinding, format: .number)
+                        TextField("Height", value: Binding(
+                            get: { editor.logicalHeight },
+                            set: { editor.setHeight($0) }
+                        ), format: .number)
                             .textFieldStyle(.roundedBorder)
                     }
                 }
-                Toggle("Lock aspect ratio", isOn: $lockAspect).toggleStyle(.switch)
+                Toggle("Lock aspect ratio", isOn: $editor.lockAspect).toggleStyle(.switch)
             } header: {
                 Text("Resolution")
             } footer: {
                 Text(
-                    "Logical pixels. Physical = \(current.physicalWidth)×\(current.physicalHeight)."
+                    "Logical pixels. Physical = \(editor.physicalWidth)×\(editor.physicalHeight)."
                 ).font(.caption)
             }
 
             Section {
-                Picker("Preset ratio", selection: aspectSelection) {
+                Picker("Preset ratio", selection: Binding(
+                    get: {
+                        if case .standard(let r) = editor.aspect { return r.rawValue }
+                        return "__custom__"
+                    },
+                    set: { tag in
+                        if let r = Geometry.Ratio(rawValue: tag) {
+                            if keepWidth { editor.setAspect(r.factor) }
+                            else { editor.setAspectKeepingHeight(r.factor) }
+                        }
+                    }
+                )) {
                     ForEach(Geometry.Ratio.allCases, id: \.rawValue) { r in
                         Text(r.label).tag(r.rawValue)
                     }
                     Divider()
-                    Text(customRatioLabel).tag("__custom__")
+                    Text("Custom · \(Geometry.reducedRatio(width: editor.logicalWidth, height: editor.logicalHeight))")
+                        .tag("__custom__")
                 }
                 .pickerStyle(.menu).labelsHidden()
 
@@ -588,79 +605,35 @@ private struct PresetDetailView: View {
             }
 
             Section {
-                Toggle("HiDPI / Retina @2x", isOn: hidpiBinding).toggleStyle(.switch)
+                Toggle("HiDPI / Retina", isOn: $editor.hidpi).toggleStyle(.switch)
+                if editor.hidpi {
+                    CustomDpiForm(model: editor)
+                }
             } header: {
                 Text("Density")
             } footer: {
-                Text("Doubles physical pixels for a Retina panel identity.").font(.caption)
+                if editor.hidpi {
+                    Text("Logical \(editor.logicalWidth)×\(editor.logicalHeight) → physical \(editor.physicalWidth)×\(editor.physicalHeight). \(dpiFooter())").font(.caption)
+                } else {
+                    Text("Doubles physical pixels for a Retina panel identity.").font(.caption)
+                }
             }
         }
         .formStyle(.grouped)
     }
 
-    @State private var lockAspect = true
-    @State private var keepWidth = true
+    // MARK: Derived helpers (all read from the editor model)
 
-    // MARK: Bindings
-
-    private var nameBinding: Binding<String> {
-        Binding(get: { current.name }, set: { v in setEdit { $0.name = v } })
-    }
-    private var hidpiBinding: Binding<Bool> {
-        Binding(get: { current.hidpi }, set: { v in setEdit { $0.hidpi = v } })
-    }
-    private var widthBinding: Binding<UInt32> {
-        Binding(
-            get: { current.logicalWidth },
-            set: { newW in
-                setEdit { p in
-                    p.logicalWidth = newW
-                    if lockAspect {
-                        let a = Geometry.aspectFrom(
-                            width: current.logicalWidth, height: current.logicalHeight)
-                        p.logicalHeight = Geometry.height(forWidth: newW, aspect: a)
-                    }
-                }
-            })
-    }
-    private var heightBinding: Binding<UInt32> {
-        Binding(
-            get: { current.logicalHeight },
-            set: { newH in
-                setEdit { p in
-                    p.logicalHeight = newH
-                    if lockAspect {
-                        let a = Geometry.aspectFrom(
-                            width: current.logicalWidth, height: current.logicalHeight)
-                        p.logicalWidth = UInt32((Double(newH) * a.factor).rounded())
-                    }
-                }
-            })
-    }
-
-    private var customRatioLabel: String {
-        "Custom · \(Geometry.reducedRatio(width: current.logicalWidth, height: current.logicalHeight))"
-    }
-
-    private var aspectSelection: Binding<String> {
-        Binding(
-            get: {
-                let a = Geometry.aspectFrom(
-                    width: current.logicalWidth, height: current.logicalHeight)
-                if case .standard(let r) = a { return r.rawValue }
-                return "__custom__"
-            },
-            set: { tag in
-                guard let r = Geometry.Ratio(rawValue: tag) else { return }
-                setEdit { p in
-                    p.logicalHeight = Geometry.height(
-                        forWidth: p.logicalWidth, aspect: .standard(r))
-                }
-            })
+    /// One-line density summary for the section footer.
+    private func dpiFooter() -> String {
+        let pct = editor.effectiveDpiPercent
+        let ppi = editor.ppi
+        let (w, h) = editor.screenMM
+        return "\(editor.densitySuffix) · \(pct)% · \(Int(ppi)) ppi · \(String(format: "%.1f", w / 10))×\(String(format: "%.1f", h / 10)) cm."
     }
 
     private var ratioPair: (num: UInt32, den: UInt32) {
-        let a = Geometry.aspectFrom(width: current.logicalWidth, height: current.logicalHeight)
+        let a = editor.aspect
         if case .standard(let r) = a {
             let parts = r.rawValue.split(separator: ":")
             if parts.count == 2, let n = UInt32(parts[0]), let d = UInt32(parts[1]) {
@@ -668,9 +641,9 @@ private struct PresetDetailView: View {
             }
         }
         func gcd(_ x: UInt32, _ y: UInt32) -> UInt32 { y == 0 ? x : gcd(y, x % y) }
-        guard current.logicalWidth > 0, current.logicalHeight > 0 else { return (16, 9) }
-        let g = gcd(current.logicalWidth, current.logicalHeight)
-        return (current.logicalWidth / g, current.logicalHeight / g)
+        guard editor.logicalWidth > 0, editor.logicalHeight > 0 else { return (16, 9) }
+        let g = gcd(editor.logicalWidth, editor.logicalHeight)
+        return (editor.logicalWidth / g, editor.logicalHeight / g)
     }
 
     private var ratioNumeratorBinding: Binding<Int> {
@@ -690,19 +663,11 @@ private struct PresetDetailView: View {
     private func applyRatio(num: UInt32, den: UInt32) {
         guard den > 0 else { return }
         let factor = Double(num) / Double(den)
-        setEdit { p in
-            if keepWidth {
-                p.logicalHeight = max(1, UInt32((Double(p.logicalWidth) / factor).rounded()))
-            } else {
-                p.logicalWidth = max(1, UInt32((Double(p.logicalHeight) * factor).rounded()))
-            }
+        if keepWidth {
+            editor.setAspect(factor)
+        } else {
+            editor.setAspectKeepingHeight(factor)
         }
-    }
-
-    private func setEdit(_ mutate: (inout CustomPreset) -> Void) {
-        var p = current
-        mutate(&p)
-        edit = p
     }
 
     private func ratioField(value: Binding<Int>) -> some View {
@@ -787,11 +752,12 @@ private struct MonitorPreview: View {
     private var caption: some View {
         let (w, h) = preset.screenMM
         let sizeStr = String(format: "%.1f × %.1f cm", w / 10, h / 10)
+        let dpiPart: String = preset.hidpi
+            ? "  ·  \(Geometry.densitySuffix(scale: preset.scale)) (\(Int(preset.ppi)) ppi)"
+            : ""
         return HStack(spacing: 10) {
-            Text(
-                "\(preset.physicalWidth)×\(preset.physicalHeight) px\(preset.hidpi ? "  ·  @2x" : "")"
-            )
-            Text("\(sizeStr)  ·  \(String(format: "%.0f\"", preset.diagonalInches))")
+            Text("\(preset.physicalWidth)×\(preset.physicalHeight) px")
+            Text("\(sizeStr)  ·  \(String(format: "%.0f\"", preset.diagonalInches))\(dpiPart)")
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
@@ -919,5 +885,57 @@ private struct EmptyDetail: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Custom Presets")
+    }
+}
+
+// MARK: - Inline Custom DPI form
+
+/// Mirrors the tray's Custom DPI dialog inside the preset manager: a percentage
+/// TextField + a Keep Physical | Keep Logical segmented control, with a live
+/// read-out of the resulting physical / logical pixels.
+///
+/// - Keep Physical (default): changing % re-derives logical from the held
+///   physical pixel count (logical = physical / scale).
+/// - Keep Logical: changing % only updates dpiPercent; logical stays, physical
+///   follows (physical = logical × scale).
+private struct CustomDpiForm: View {
+    @ObservedObject var model: PresetEditorModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("DPI scaling").font(.caption).foregroundStyle(.secondary)
+            // [250]%   ………   Keep Physical | Keep Logical
+            HStack(spacing: 12) {
+                HStack(spacing: 2) {
+                    TextField("", value: Binding(
+                        get: { model.effectiveDpiPercent },
+                        set: { model.setDpi($0) }
+                    ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 70)
+                    Text("%").foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                Picker("", selection: $model.dpiKeepPhysical) {
+                    Text("Keep Physical").tag(true)
+                    Text("Keep Logical").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 200)
+            }
+            // Live read-out of the resulting physical / logical pixels.
+            Text(resultLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var resultLine: String {
+        let ppi = model.ppi
+        let (w, h) = model.screenMM
+        return "physical \(model.physicalWidth)×\(model.physicalHeight) · logical \(model.logicalWidth)×\(model.logicalHeight) · \(Int(ppi)) ppi · \(String(format: "%.1f", w / 10))×\(String(format: "%.1f", h / 10)) cm"
     }
 }

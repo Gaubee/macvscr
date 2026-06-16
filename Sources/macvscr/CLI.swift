@@ -1,3 +1,4 @@
+import macvscrCore
 import Foundation
 import Darwin
 

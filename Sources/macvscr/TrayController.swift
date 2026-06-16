@@ -1,3 +1,4 @@
+import macvscrCore
 import AppKit
 
 /// Owns the status item, the live virtual display, and the editable
@@ -22,6 +23,8 @@ final class TrayController: NSObject {
     private var logicalWidth: UInt32 = 3440
     private var aspect: Geometry.Aspect = .standard(.w21x9)
     private var hidpi = true
+    /// DPI scaling % (only meaningful when `hidpi`); `nil` = 200% (default).
+    private var dpiPercent: Int? = nil
 
     /// Last successfully applied (committed) snapshot (drives the checkmarks).
     private var applied: VirtualDisplayConfig?
@@ -30,8 +33,10 @@ final class TrayController: NSObject {
     let preview = PreviewState.shared
 
     private var logicalHeight: UInt32 { Geometry.height(forWidth: logicalWidth, aspect: aspect) }
-    private var physicalWidth: UInt32 { logicalWidth * (hidpi ? 2 : 1) }
-    private var physicalHeight: UInt32 { logicalHeight * (hidpi ? 2 : 1) }
+    private var scale: Double { hidpi ? Double(dpiPercent ?? 200) / 100 : 1 }
+    private var physicalWidth: UInt32 { Geometry.physicalFrom(logical: logicalWidth, scale: scale) }
+    private var physicalHeight: UInt32 { Geometry.physicalFrom(logical: logicalHeight, scale: scale) }
+    private var densitySuffix: String { hidpi ? Geometry.densitySuffix(scale: scale) : "" }
 
     // MARK: Lifecycle
 
@@ -42,6 +47,7 @@ final class TrayController: NSObject {
         logicalWidth = initial.logicalWidth
         aspect = Geometry.aspectFrom(width: initial.logicalWidth, height: initial.logicalHeight)
         hidpi = initial.hidpi
+        dpiPercent = initial.dpiPercent
 
         if display.create(initial) {
             applied = initial
@@ -57,7 +63,7 @@ final class TrayController: NSObject {
             library: library,
             preview: preview,
             liveConfig: { [weak self] in
-                self?.currentLiveConfig() ?? (width: 3440, height: 1440, hidpi: true)
+                self?.currentLiveConfig() ?? (width: 3440, height: 1440, hidpi: true, dpiPercent: nil)
             },
             apply: { [weak self] preset in self?.startPreview(preset) },
             save: { [weak self] preset in self?.library.update(preset) },
@@ -78,12 +84,12 @@ final class TrayController: NSObject {
         menu.autoenablesItems = false
 
         let head = menu.addItem(
-            withTitle: "Active: \(logicalWidth)×\(logicalHeight)\(hidpi ? " @2x" : "")",
+            withTitle: "Active: \(logicalWidth)×\(logicalHeight)\(hidpi ? " " + densitySuffix : "")",
             action: nil, keyEquivalent: "")
         head.isEnabled = false
 
         let phys = menu.addItem(
-            withTitle: "Physical: \(physicalWidth)×\(physicalHeight)   ·  \(aspect.label)",
+            withTitle: physicalHeadline(),
             action: nil, keyEquivalent: "")
         phys.isEnabled = false
 
@@ -102,9 +108,17 @@ final class TrayController: NSObject {
         let ratios = menu.addItem(withTitle: "Aspect", action: nil, keyEquivalent: "")
         ratios.submenu = ratioSubmenu()
 
-        let hidpiItem = menu.addItem(withTitle: "HiDPI / Retina @2x", action: #selector(toggleHiDPI), keyEquivalent: "")
+        let hidpiItem = menu.addItem(
+            withTitle: "HiDPI / Retina\(hidpi ? " " + densitySuffix : "")",
+            action: #selector(toggleHiDPI), keyEquivalent: "")
         hidpiItem.target = self
         hidpiItem.state = hidpi ? .on : .off
+
+        // DPI scaling submenu — only meaningful when HiDPI (Retina) is on.
+        if hidpi {
+            let dpi = menu.addItem(withTitle: "DPI", action: nil, keyEquivalent: "")
+            dpi.submenu = dpiSubmenu()
+        }
 
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -214,8 +228,10 @@ final class TrayController: NSObject {
         a.append(NSAttributedString(string: " × ", attributes: [.font: base]))
         a.append(NSAttributedString(string: "\(h)", attributes: [.font: boldWidth ? base : bold]))
         if hidpi {
+            let pw = Geometry.physicalFrom(logical: w, scale: scale)
+            let ph = Geometry.physicalFrom(logical: h, scale: scale)
             a.append(NSAttributedString(
-                string: "  (\(w * 2)×\(h * 2))",
+                string: "  (\(pw)×\(ph))",
                 attributes: [.font: base, .foregroundColor: NSColor.secondaryLabelColor]))
         }
         return a
@@ -243,7 +259,67 @@ final class TrayController: NSObject {
 
     private func isActive(logicalW: UInt32, logicalH: UInt32, hidpi: Bool) -> Bool {
         guard let a = applied else { return false }
-        return a.logicalWidth == logicalW && a.logicalHeight == logicalH && a.hidpi == hidpi
+        // Match geometry + that the applied DPI % is the default (200/nil), so a
+        // preset only shows checked when density is at its default scaling.
+        let dpiIsDefault = (a.dpiPercent ?? 200) == 200
+        return a.logicalWidth == logicalW && a.logicalHeight == logicalH && a.hidpi == hidpi && dpiIsDefault
+    }
+
+    /// "Physical: W×H · aspect" with an appended "· @NNN%" only when a non-default
+    /// DPI scaling is set.
+    private func physicalHeadline() -> String {
+        var s = "Physical: \(physicalWidth)×\(physicalHeight)   ·  \(aspect.label)"
+        if let pct = dpiPercent, pct != 200 { s += "   ·  @\(pct)%" }
+        return s
+    }
+
+    /// DPI scaling presets (25% steps). 200% = the default.
+    private static let dpiPresets: [Int] = [125, 150, 175, 200, 225, 250, 275, 300]
+
+    /// Effective DPI percent (nil → 200).
+    private var effectiveDpiPercent: Int { dpiPercent ?? 200 }
+
+    /// PPI for the current config (matches VirtualDisplayConfig.ppi: 109×scale).
+    private var currentPPI: Double { hidpi ? 109 * scale : 109 }
+
+    /// Physical screen size in mm for the current config.
+    private func screenMM() -> (w: Double, h: Double) {
+        let pxPerMM = currentPPI / 25.4
+        return (Double(physicalWidth) / pxPerMM, Double(physicalHeight) / pxPerMM)
+    }
+
+    /// "logical WxH · NNN ppi · WW×HH cm" for a candidate DPI %, under the
+    /// default Keep-Physical behavior (physical px held at the current value).
+    private func dpiAnnotation(forPercent pct: Int) -> String {
+        let s = Double(pct) / 100
+        let ppi = 109 * s
+        let lw = Geometry.logicalFrom(physical: physicalWidth, scale: s)
+        let lh = Geometry.logicalFrom(physical: physicalHeight, scale: s)
+        let pxPerMM = ppi / 25.4
+        let wCM = Double(physicalWidth) / pxPerMM / 10
+        let hCM = Double(physicalHeight) / pxPerMM / 10
+        return "\(lw)×\(lh) · \(Int(ppi)) ppi · \(String(format: "%.1f", wCM))×\(String(format: "%.1f", hCM)) cm"
+    }
+
+    private func dpiSubmenu() -> NSMenu {
+        let m = NSMenu(); m.autoenablesItems = false
+        let cur = effectiveDpiPercent
+        for pct in Self.dpiPresets {
+            let item = m.addItem(
+                withTitle: "\(pct)%   (\(dpiAnnotation(forPercent: pct)))",
+                action: #selector(pickDpi(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = pct
+            if pct == cur { item.state = .on }
+        }
+        // Custom — checked when the current value isn't one of the presets.
+        let isPreset = Self.dpiPresets.contains(cur)
+        m.addItem(.separator())
+        let title = isPreset ? "Custom…" : "Custom: \(cur)%"
+        let custom = m.addItem(withTitle: title, action: #selector(customDpi), keyEquivalent: "")
+        custom.target = self
+        if !isPreset { custom.state = .on }
+        return m
     }
 
     // MARK: Actions
@@ -253,6 +329,7 @@ final class TrayController: NSObject {
         logicalWidth = p.logicalWidth
         aspect = Geometry.aspectFrom(width: p.logicalWidth, height: p.logicalHeight)
         hidpi = p.hidpi
+        dpiPercent = nil   // built-in presets don't carry a DPI %; reset to default
         apply()
     }
 
@@ -268,8 +345,8 @@ final class TrayController: NSObject {
     }
 
     /// Snapshot of the currently-applied geometry (defaults for new presets).
-    func currentLiveConfig() -> (width: UInt32, height: UInt32, hidpi: Bool) {
-        (logicalWidth, logicalHeight, hidpi)
+    func currentLiveConfig() -> (width: UInt32, height: UInt32, hidpi: Bool, dpiPercent: Int?) {
+        (logicalWidth, logicalHeight, hidpi, dpiPercent)
     }
 
     @objc func pickWidth(_ s: NSMenuItem) {
@@ -291,6 +368,7 @@ final class TrayController: NSObject {
         let aspect = self.aspect
         let oldHeight = self.logicalHeight
         let hidpi = self.hidpi
+        let suffix = self.densitySuffix
         let res = PromptPanel.run(
             title: "Custom width",
             message: "Enter a width in logical pixels.",
@@ -299,7 +377,7 @@ final class TrayController: NSObject {
             preview: { input, lock, _ in
                 guard let w = UInt32(input.trimmingCharacters(in: .whitespaces)) else { return nil }
                 let h = lock ? Geometry.height(forWidth: w, aspect: aspect) : oldHeight
-                return "\(w) × \(h)\(hidpi ? "  ·  @2x" : "")"
+                return "\(w) × \(h)\(hidpi ? "  ·  " + suffix : "")"
             })
         guard let s = res.value, let w = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
         logicalWidth = w
@@ -311,6 +389,7 @@ final class TrayController: NSObject {
         let aspect = self.aspect
         let oldWidth = self.logicalWidth
         let hidpi = self.hidpi
+        let suffix = self.densitySuffix
         let res = PromptPanel.run(
             title: "Custom height",
             message: "Enter a height in logical pixels.",
@@ -319,7 +398,7 @@ final class TrayController: NSObject {
             preview: { input, lock, _ in
                 guard let h = UInt32(input.trimmingCharacters(in: .whitespaces)) else { return nil }
                 let w = lock ? UInt32((Double(h) * aspect.factor).rounded()) : oldWidth
-                return "\(w) × \(h)\(hidpi ? "  ·  @2x" : "")"
+                return "\(w) × \(h)\(hidpi ? "  ·  " + suffix : "")"
             })
         guard let s = res.value, let h = UInt32(s.trimmingCharacters(in: .whitespaces)) else { return }
         if res.checkbox {
@@ -334,6 +413,7 @@ final class TrayController: NSObject {
         let width = self.logicalWidth
         let height = self.logicalHeight
         let hidpi = self.hidpi
+        let suffix = self.densitySuffix
         let res = PromptPanel.run(
             title: "Custom aspect",
             message: "Enter an aspect as W:H (e.g. 21:9).",
@@ -345,10 +425,10 @@ final class TrayController: NSObject {
                 let f = a / b
                 if seg == 0 {
                     let h = UInt32((Double(width) / f).rounded())
-                    return "\(width) × \(h)\(hidpi ? "  ·  @2x" : "")"
+                    return "\(width) × \(h)\(hidpi ? "  ·  " + suffix : "")"
                 } else {
                     let w = UInt32((Double(height) * f).rounded())
-                    return "\(w) × \(height)\(hidpi ? "  ·  @2x" : "")"
+                    return "\(w) × \(height)\(hidpi ? "  ·  " + suffix : "")"
                 }
             })
         guard let s = res.value else { return }
@@ -362,6 +442,63 @@ final class TrayController: NSObject {
 
     @objc func toggleHiDPI() { hidpi.toggle(); apply() }
 
+    @objc func pickDpi(_ s: NSMenuItem) {
+        guard let pct = s.representedObject as? Int else { return }
+        // Default behavior = Keep Logical: logical resolution stays; physical
+        // pixels re-derive for the new scale.
+        dpiPercent = (pct == 200) ? nil : pct
+        apply()
+    }
+
+    @objc func customDpi() {
+        let curPct = effectiveDpiPercent
+        let pw = physicalWidth, ph = physicalHeight   // current physical (held if Keep Physical)
+        let lw = logicalWidth, lh = logicalHeight     // current logical (held if Keep Logical)
+        let res = PromptPanel.run(
+            title: "Custom DPI scaling",
+            message: "Now:  physical \(pw)×\(ph)\n         logical \(lw)×\(lh)\nEnter 100–400.",
+            initial: "\(curPct)",
+            segment: (["Keep Physical", "Keep Logical"], 1),
+            suffix: "%",
+            preview: { input, _, seg in
+                guard let pct = Int(input.trimmingCharacters(in: .whitespaces)),
+                      (100...400).contains(pct) else { return nil }
+                let s = Double(pct) / 100
+                let ppi = 109 * s
+                let pxPerMM = ppi / 25.4
+                // Compute BOTH physical and logical for the candidate scale.
+                let (newPW, newPH, newLW, newLH): (UInt32, UInt32, UInt32, UInt32)
+                if seg == 0 {
+                    // Keep Physical: physical held; logical = physical / scale.
+                    newPW = pw; newPH = ph
+                    newLW = Geometry.logicalFrom(physical: pw, scale: s)
+                    newLH = Geometry.logicalFrom(physical: ph, scale: s)
+                } else {
+                    // Keep Logical: logical held; physical = logical × scale.
+                    newLW = lw; newLH = lh
+                    newPW = Geometry.physicalFrom(logical: lw, scale: s)
+                    newPH = Geometry.physicalFrom(logical: lh, scale: s)
+                }
+                // cm is always derived from the (new) physical pixel count.
+                let wCM = Double(newPW) / pxPerMM / 10
+                let hCM = Double(newPH) / pxPerMM / 10
+                return "physical \(newPW)×\(newPH)\nlogical \(newLW)×\(newLH) · \(Int(ppi)) ppi · \(String(format: "%.1f", wCM))×\(String(format: "%.1f", hCM)) cm"
+            })
+        guard let s = res.value,
+              let pct = Int(s.trimmingCharacters(in: .whitespaces)),
+              (100...400).contains(pct) else { return }
+        let newScale = Double(pct) / 100
+        dpiPercent = (pct == 200) ? nil : pct
+        if res.segment == 0 {
+            // Keep Physical: re-derive logical from the held physical count.
+            logicalWidth = Geometry.logicalFrom(physical: pw, scale: newScale)
+            aspect = Geometry.aspectFrom(width: logicalWidth,
+                                         height: Geometry.logicalFrom(physical: ph, scale: newScale))
+        }
+        // Keep Logical: logicalWidth/Height unchanged; scale change flows through apply().
+        apply()
+    }
+
     @objc func quit() { display.destroy(); NSApp.terminate(nil) }
 
     // MARK: Apply
@@ -370,6 +507,7 @@ final class TrayController: NSObject {
         let cfg = VirtualDisplayConfig(logicalWidth: logicalWidth,
                                        logicalHeight: logicalHeight,
                                        hidpi: hidpi,
+                                       dpiPercent: dpiPercent,
                                        name: "Virtual Display")
         if display.reconfigure(cfg) {
             applied = cfg
@@ -388,6 +526,7 @@ final class TrayController: NSObject {
         let cfg = VirtualDisplayConfig(logicalWidth: p.logicalWidth,
                                        logicalHeight: p.logicalHeight,
                                        hidpi: p.hidpi,
+                                       dpiPercent: p.dpiPercent,
                                        name: "Virtual Display")
         _ = display.reconfigure(cfg)
         rebuildMenu()
@@ -409,6 +548,7 @@ final class TrayController: NSObject {
         logicalWidth = p.logicalWidth
         aspect = Geometry.aspectFrom(width: p.logicalWidth, height: p.logicalHeight)
         hidpi = p.hidpi
+        dpiPercent = p.dpiPercent
         preview.clear()
         apply()
     }

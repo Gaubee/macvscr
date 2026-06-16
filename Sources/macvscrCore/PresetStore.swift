@@ -8,12 +8,12 @@ import Combine
 /// `~/.macvscr/presets.json`, publishes to SwiftUI, and posts
 /// `didChangeNotification` so `TrayController` can rebuild its Custom section
 /// even while the menu is closed.
-final class PresetLibrary: ObservableObject {
+public final class PresetLibrary: ObservableObject {
 
     /// Posted after every mutation (observed by `TrayController`).
-    static let didChangeNotification = Notification.Name("macvscr.PresetStoreDidChange")
+    public static let didChangeNotification = Notification.Name("macvscr.PresetStoreDidChange")
 
-    @Published private(set) var presets: [CustomPreset] = []
+    @Published private(set) public var presets: [CustomPreset] = []
 
     private static var directoryURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -23,11 +23,11 @@ final class PresetLibrary: ObservableObject {
         directoryURL.appendingPathComponent("presets.json")
     }
 
-    init() { load() }
+    public init() { load() }
 
     // MARK: Load / save
 
-    func load() {
+    public func load() {
         guard let data = try? Data(contentsOf: Self.fileURL) else { presets = []; return }
         // Tolerant: any decode failure → empty, never crash the tray.
         presets = (try? JSONDecoder().decode([CustomPreset].self, from: data)) ?? []
@@ -44,26 +44,26 @@ final class PresetLibrary: ObservableObject {
 
     /// Append a preset; returns the new preset so callers can select it.
     @discardableResult
-    func append(_ p: CustomPreset) -> CustomPreset {
+    public func append(_ p: CustomPreset) -> CustomPreset {
         presets.append(p)
         persist()
         return p
     }
 
     /// Replace the preset with the same id, preserving list order.
-    func update(_ p: CustomPreset) {
+    public func update(_ p: CustomPreset) {
         guard let i = presets.firstIndex(where: { $0.id == p.id }) else { return }
         presets[i] = p
         persist()
     }
 
-    func remove(id: UUID) {
+    public func remove(id: UUID) {
         presets.removeAll { $0.id == id }
         persist()
     }
 
     // MARK: Lookup
 
-    func find(id: UUID) -> CustomPreset? { presets.first { $0.id == id } }
-    func contains(id: UUID) -> Bool { presets.contains { $0.id == id } }
+    public func find(id: UUID) -> CustomPreset? { presets.first { $0.id == id } }
+    public func contains(id: UUID) -> Bool { presets.contains { $0.id == id } }
 }

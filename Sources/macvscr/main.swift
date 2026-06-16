@@ -1,3 +1,4 @@
+import macvscrCore
 import AppKit
 
 // Parse CLI args (all pixel values are LOGICAL).

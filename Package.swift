@@ -20,10 +20,22 @@ let package = Package(
                 .linkedFramework("IOKit"),
             ]
         ),
+        // Pure-Foundation/Combine logic: geometry, presets, models, stores.
+        // Extracted so it can be unit-tested (SwiftPM executableTargets can't
+        // be @testable-imported).
+        .target(
+            name: "macvscrCore",
+            path: "Sources/macvscrCore"
+        ),
         .executableTarget(
             name: "macvscr",
-            dependencies: ["VSCBridge"],
+            dependencies: ["VSCBridge", "macvscrCore"],
             path: "Sources/macvscr"
+        ),
+        .testTarget(
+            name: "macvscrCoreTests",
+            dependencies: ["macvscrCore"],
+            path: "Tests/macvscrCoreTests"
         ),
     ]
 )

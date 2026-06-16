@@ -81,15 +81,21 @@ VSCDisplayRef vsc_create(const VSCDisplayConfig *cfg, uint32_t *outDisplayID) {
     if (!vd || vd.displayID == kCGNullDirectDisplay) return NULL;
 
     CGVirtualDisplaySettings *s = [[CGVirtualDisplaySettings alloc] init];
-    s.hiDPI = cfg->hiDPI ? 1 : 0;
+    // The `hiDPI` flag tells macOS this is a Retina-style backing; the actual
+    // backing scale is encoded by the mode list (full physical + a "logical"
+    // mode at physical/scale). 1.5×+ reads as HiDPI to the system.
+    double scale = cfg->scale > 0 ? cfg->scale : 2.0;
+    s.hiDPI = scale >= 1.5 ? 1 : 0;
     CGVirtualDisplayMode *full =
         [[CGVirtualDisplayMode alloc] initWithWidth:cfg->width height:cfg->height refreshRate:cfg->refreshRate];
-    if (cfg->hiDPI) {
-        // Two modes (full + half) with hiDPI=1 => Retina backing
-        // (logical resolution = half the physical resolution).
-        CGVirtualDisplayMode *half = [[CGVirtualDisplayMode alloc]
-            initWithWidth:cfg->width / 2 height:cfg->height / 2 refreshRate:cfg->refreshRate];
-        s.modes = @[full, half];
+    if (scale > 1.0) {
+        // Logical mode = physical ÷ scale. At scale 2 this is the classic
+        // Retina half-mode (logical = physical/2). scale 1.5 → physical/1.5, etc.
+        uint32_t lw = (uint32_t)llround(cfg->width / scale);
+        uint32_t lh = (uint32_t)llround(cfg->height / scale);
+        CGVirtualDisplayMode *logical = [[CGVirtualDisplayMode alloc]
+            initWithWidth:lw height:lh refreshRate:cfg->refreshRate];
+        s.modes = @[full, logical];
     } else {
         s.modes = @[full];
     }

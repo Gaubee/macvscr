@@ -80,4 +80,32 @@ public enum Geometry {
         let d = gcd(width, height)
         return "\(width / d):\(height / d)"
     }
+
+    // MARK: Density (physical / logical) scale helpers
+
+    /// Physical pixels for a logical dimension at a given backing scale.
+    public static func physicalFrom(logical: UInt32, scale: Double) -> UInt32 {
+        guard scale > 0 else { return logical }
+        return UInt32((Double(logical) * scale).rounded())
+    }
+
+    /// Logical pixels for a physical dimension at a given backing scale.
+    public static func logicalFrom(physical: UInt32, scale: Double) -> UInt32 {
+        guard scale > 0 else { return physical }
+        return UInt32((Double(physical) / scale).rounded())
+    }
+
+    /// Density suffix string, e.g. "@2x" (scale 2), "@1.5x" (scale 1.5).
+    /// Integer scales render without a decimal; others keep one decimal place.
+    public static func densitySuffix(scale: Double) -> String {
+        if scale == scale.rounded() {
+            return "@\(Int(scale))x"
+        }
+        return String(format: "@%.1fx", scale)
+    }
+
+    /// Density suffix from a DPI percent (nil = 200% = "@2x").
+    public static func densitySuffix(dpiPercent: Int?) -> String {
+        densitySuffix(scale: Double(dpiPercent ?? 200) / 100)
+    }
 }

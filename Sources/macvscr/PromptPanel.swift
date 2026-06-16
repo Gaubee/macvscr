@@ -1,4 +1,43 @@
+import macvscrCore
 import AppKit
+
+/// `NSWindow` subclass that forwards the standard text-editing shortcuts
+/// (⌘C / ⌘V / ⌘X / ⌘A / ⌘Z / ⇧⌘Z) to the first responder. The app is
+/// `.accessory` (no Edit menu in the menu bar), so without this NSTextField /
+/// NSTextView never receive copy/paste/cut/selectAll/undo/redo. Used by both
+/// the PromptPanel modal and the SwiftUI management window.
+class EditCommandsWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.modifierFlags.contains(.command),
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.command).isEmpty
+        else { return super.performKeyEquivalent(with: event) }
+
+        let action: Selector?
+        switch event.charactersIgnoringModifiers {
+        case "c": action = NSSelectorFromString("copy:")
+        case "v": action = NSSelectorFromString("paste:")
+        case "x": action = NSSelectorFromString("cut:")
+        case "a": action = NSSelectorFromString("selectAll:")
+        case "z": action = NSSelectorFromString("undo:")
+        case "Z": action = NSSelectorFromString("redo:")
+        default: action = nil
+        }
+
+        guard let action else { return super.performKeyEquivalent(with: event) }
+        // Walk the responder chain from the first responder; if anyone handles
+        // it, we're done. Otherwise defer to super (default key equivalents).
+        var responder: NSResponder? = firstResponder
+        while let r = responder, r !== self {
+            if r.responds(to: action) {
+                r.perform(action, with: nil)
+                return true
+            }
+            responder = r.nextResponder
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
 
 /// A small centered modal dialog: an icon (centered, top), a message, a text
 /// field, an optional control (a checkbox or a 2-option segmented switch), a
@@ -7,7 +46,7 @@ import AppKit
 /// The optional control lets the caller expose a "lock" choice:
 ///   - checkbox   : "Lock aspect ratio" on/off (used by Width / Height prompts)
 ///   - segmented  : e.g. "Keep width | Keep height" (used by the Aspect prompt)
-final class PromptPanel: NSWindow, NSTextFieldDelegate {
+final class PromptPanel: EditCommandsWindow, NSTextFieldDelegate {
 
     private let field = NSTextField()
     private let previewLabel = NSTextField(labelWithString: "")
@@ -30,9 +69,11 @@ final class PromptPanel: NSWindow, NSTextFieldDelegate {
                     initial: String,
                     checkbox: (label: String, initial: Bool)? = nil,
                     segment: (options: [String], initial: Int)? = nil,
+                    suffix: String? = nil,
                     preview: @escaping (String, Bool, Int) -> String?) -> Outcome {
         let panel = PromptPanel(title: title, message: message, initial: initial,
-                                checkbox: checkbox, segment: segment, preview: preview)
+                                checkbox: checkbox, segment: segment, suffix: suffix,
+                                preview: preview)
         NSApp.runModal(for: panel)
         panel.close()
         return Outcome(
@@ -45,6 +86,7 @@ final class PromptPanel: NSWindow, NSTextFieldDelegate {
     private init(title: String, message: String, initial: String,
                  checkbox cb: (label: String, initial: Bool)?,
                  segment seg: (options: [String], initial: Int)?,
+                 suffix: String?,
                  preview: @escaping (String, Bool, Int) -> String?) {
         self.previewBuilder = preview
         super.init(contentRect: NSRect(x: 0, y: 0, width: 380, height: 290),
@@ -60,12 +102,29 @@ final class PromptPanel: NSWindow, NSTextFieldDelegate {
         icon.frame = NSRect(x: 168, y: 236, width: 44, height: 44)
 
         let msg = wrappingLabel(message)
-        msg.frame = NSRect(x: 30, y: 190, width: 320, height: 36)
+        msg.maximumNumberOfLines = 0
+        msg.frame = NSRect(x: 30, y: 184, width: 320, height: 48)
 
         field.stringValue = initial
         field.bezelStyle = .roundedBezel
         field.delegate = self
+        // Right-align when a suffix (e.g. "%") is shown, for numeric entry.
+        if suffix != nil { field.alignment = .right }
         field.frame = NSRect(x: 70, y: 150, width: 240, height: 24)
+
+        // Optional suffix label ("%" etc.) docked to the right of the field.
+        var suffixLabel: NSTextField?
+        if let suffix = suffix {
+            let l = NSTextField(labelWithString: suffix)
+            l.font = .systemFont(ofSize: 13)
+            l.textColor = .secondaryLabelColor
+            l.sizeToFit()
+            var f = l.frame
+            f.origin.x = 70 + 240 + 6
+            f.origin.y = 150 + 3
+            l.frame = f
+            suffixLabel = l
+        }
 
         if let cb = cb {
             let b = NSButton(checkboxWithTitle: cb.label, target: self, action: #selector(changed))
@@ -87,7 +146,11 @@ final class PromptPanel: NSWindow, NSTextFieldDelegate {
         previewLabel.alignment = .center
         previewLabel.textColor = .secondaryLabelColor
         previewLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        previewLabel.frame = NSRect(x: 20, y: 74, width: 340, height: 20)
+        previewLabel.lineBreakMode = .byWordWrapping
+        previewLabel.maximumNumberOfLines = 0
+        previewLabel.cell?.truncatesLastVisibleLine = false
+        previewLabel.cell?.wraps = true
+        previewLabel.frame = NSRect(x: 20, y: 64, width: 340, height: 40)
 
         let cancel = makeButton("Cancel", action: #selector(cancel), key: "\u{1b}")
         cancel.frame = NSRect(x: 196, y: 20, width: 80, height: 26)
@@ -98,6 +161,7 @@ final class PromptPanel: NSWindow, NSTextFieldDelegate {
         for v in [icon, msg, field, previewLabel, cancel, ok] { cv.addSubview(v) }
         if let b = checkbox { cv.addSubview(b) }
         if let s = segmented { cv.addSubview(s) }
+        if let s = suffixLabel { cv.addSubview(s) }
         updatePreview()
     }
 

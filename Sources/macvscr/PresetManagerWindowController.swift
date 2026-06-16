@@ -1,3 +1,4 @@
+import macvscrCore
 import AppKit
 import SwiftUI
 
@@ -19,7 +20,7 @@ import SwiftUI
 final class PresetManagerWindowController: NSWindowController {
 
     private let library: PresetLibrary
-    private let liveConfig: () -> (width: UInt32, height: UInt32, hidpi: Bool)
+    private let liveConfig: () -> (width: UInt32, height: UInt32, hidpi: Bool, dpiPercent: Int?)
     private let apply: (CustomPreset) -> Void
     private let save: (CustomPreset) -> Void
     private let confirm: (CustomPreset) -> Void
@@ -28,7 +29,7 @@ final class PresetManagerWindowController: NSWindowController {
 
     init(library: PresetLibrary,
          preview: PreviewState,
-         liveConfig: @escaping () -> (width: UInt32, height: UInt32, hidpi: Bool),
+         liveConfig: @escaping () -> (width: UInt32, height: UInt32, hidpi: Bool, dpiPercent: Int?),
          apply: @escaping (CustomPreset) -> Void,
          save: @escaping (CustomPreset) -> Void,
          confirm: @escaping (CustomPreset) -> Void,
@@ -41,8 +42,8 @@ final class PresetManagerWindowController: NSWindowController {
         self.confirm = confirm
         self.revert = revert
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 480),
+        let window = EditCommandsWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         window.title = "Custom Presets"

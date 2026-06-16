@@ -1,32 +1,7 @@
 import Foundation
 import CoreGraphics
 import VSCBridge
-
-/// Full description of a virtual display, expressed in LOGICAL pixels.
-/// Physical = logical × 2 when HiDPI (Retina). The display name is suffixed
-/// with the physical size so each geometry gets a distinct EDID identity.
-public struct VirtualDisplayConfig: Equatable, Codable {
-    public var logicalWidth: UInt32
-    public var logicalHeight: UInt32
-    public var hidpi: Bool
-    public var refreshRate: Double
-    public var name: String
-    internal var ppi: Int
-
-    public var physicalWidth: UInt32 { logicalWidth * (hidpi ? 2 : 1) }
-    public var physicalHeight: UInt32 { logicalHeight * (hidpi ? 2 : 1) }
-
-    public init(logicalWidth: UInt32, logicalHeight: UInt32, hidpi: Bool,
-                refreshRate: Double = 60, name: String) {
-        self.logicalWidth = logicalWidth
-        self.logicalHeight = logicalHeight
-        self.hidpi = hidpi
-        self.refreshRate = refreshRate
-        self.name = name
-        // Internal-only PPI for sizeInMillimeters metadata (not user-facing).
-        self.ppi = hidpi ? 218 : 109
-    }
-}
+import macvscrCore
 
 /// Owns a single virtual display. Geometry changes are destroy + recreate
 /// (the private SPI's applySettings alone does not reliably change maxPixels*).
@@ -50,8 +25,8 @@ public final class VirtualDisplay {
                 width: pw,
                 height: ph,
                 refreshRate: cfg.refreshRate,
-                hiDPI: cfg.hidpi,
-                ppi: Double(cfg.ppi),
+                scale: cfg.scale,
+                ppi: cfg.ppi,
                 name: namePtr
             )
             var id: UInt32 = 0

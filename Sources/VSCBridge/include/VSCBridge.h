@@ -14,10 +14,10 @@ typedef struct VSCDisplay *VSCDisplayRef;
 
 /// Description of the virtual display to create.
 typedef struct {
-    uint32_t   width;        // physical pixels wide
-    uint32_t   height;       // physical pixels high
+    uint32_t   width;        // physical pixels wide (backing store)
+    uint32_t   height;       // physical pixels high (backing store)
     double     refreshRate;  // Hz (60 is a safe default)
-    bool       hiDPI;        // true => Retina backing (logical = half physical)
+    double     scale;        // backing scale = physical/logical (2.0 = Retina @2x)
     double     ppi;          // pixels per inch, drives sizeInMillimeters
     const char *name;        // UTF-8 display name; encoded identity
 } VSCDisplayConfig;
