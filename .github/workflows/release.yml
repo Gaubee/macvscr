@@ -24,11 +24,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-        # NOTE: do NOT set NODE_AUTH_TOKEN. Trusted Publishing authenticates
-        # purely via the job's `id-token: write` permission (OIDC); setting a
-        # classic token makes npm skip the OIDC path and fail with a misleading
-        # E404. `registry-url` is still needed so npm knows the target registry.
+          # NOTE: do NOT set `registry-url`. When it is set, setup-node writes
+          # an .npmrc with `_authToken=${NODE_AUTH_TOKEN}`; with no token that
+          # becomes an empty authToken, which makes npm skip the OIDC path and
+          # fail with a misleading E404 (actions/setup-node#1551). The default
+          # registry is already registry.npmjs.org, so this param is unneeded.
 
       - name: Upgrade npm (Trusted Publishing needs npm ≥ 11.5.1)
         run: npm install -g npm@latest
@@ -49,13 +49,4 @@ jobs:
 
       - name: Publish to npm (trusted publishing + provenance)
         working-directory: npm
-        # Unset NODE_AUTH_TOKEN and rewrite the .npmrc without any classic
-        # auth line, so npm falls back to the OIDC trusted-publisher path
-        # (the job has `id-token: write`). A lingering classic token makes
-        # npm skip OIDC and fail with a misleading E404 / ENEEDAUTH.
-        env:
-          NODE_AUTH_TOKEN: ""
-        run: |
-          npm config delete "//registry.npmjs.org/:_authToken" || true
-          npm config delete "always-auth" || true
-          npm publish --provenance --access public
+        run: npm publish --provenance --access public
