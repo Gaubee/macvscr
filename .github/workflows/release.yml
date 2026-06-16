@@ -40,7 +40,9 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    environment: npm-release # must match the trusted-publisher environment on npm
+    # NOTE: `environment:` intentionally OMITTED for this diagnostic run, to
+    # test whether the npm Trusted Publisher's environment field is the
+    # mismatch. If this publishes, the fix is to align the env field on npm.
     steps:
       - uses: actions/checkout@v4
 
