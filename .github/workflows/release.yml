@@ -48,9 +48,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # No `registry-url` and no NODE_AUTH_TOKEN: Trusted Publishing
-          # authenticates purely via the job's `id-token: write` permission
-          # (OIDC). The default registry is already registry.npmjs.org.
+          registry-url: 'https://registry.npmjs.org'
+          # `registry-url` IS required for npm's OIDC trusted-publishing path
+          # to trigger (verified: without it, npm never attempts OIDC and
+          # fails with ENEEDAUTH). Do NOT set NODE_AUTH_TOKEN — the empty
+          # authToken written by setup-node is fine; npm falls back to the
+          # OIDC claim enabled by `id-token: write` above.
 
       - name: Upgrade npm (Trusted Publishing needs npm ≥ 11.5.1)
         run: npm install -g npm@latest
