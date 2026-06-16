@@ -3,12 +3,12 @@ name: release
 # Publish macvscr to npm on a v* tag, using npm trusted publishing (OIDC).
 #
 # Split into two jobs so each does one thing:
-#   1. build  — compiles the native arm64 binary on a macOS runner and uploads
-#               it as an artifact.
+#   1. build   — compiles the native arm64 binary on a macOS runner and uploads
+#                it as an artifact.
 #   2. publish — downloads the binary onto a minimal Linux runner and publishes
-#               to npm via Trusted Publishing (OIDC). Keeping the publish job on
-#               a plain `ubuntu-latest` runner isolates it from any build-runner
-#               specifics and matches the most common OIDC setup.
+#                to npm via Trusted Publishing (OIDC). The publish job mirrors
+#                a known-good trusted-publishing setup (setup-node@v6, node 24,
+#                npm ^11.10.0, registry-url set, id-token: write).
 
 on:
   push:
@@ -16,8 +16,10 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Top-level OIDC permission, like the working reference project.
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   build:
@@ -39,24 +41,17 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: npm-release # must match the trusted-publisher environment on npm
-    permissions:
-      id-token: write # required for npm trusted publishing / provenance
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node for npm trusted publishing
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-          # `registry-url` IS required for npm's OIDC trusted-publishing path
-          # to trigger (verified: without it, npm never attempts OIDC and
-          # fails with ENEEDAUTH). Do NOT set NODE_AUTH_TOKEN — the empty
-          # authToken written by setup-node is fine; npm falls back to the
-          # OIDC claim enabled by `id-token: write` above.
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
-      - name: Upgrade npm (Trusted Publishing needs npm ≥ 11.5.1)
-        run: npm install -g npm@latest
+      - name: Install npm with trusted publishing support
+        run: npm install -g "npm@^11.10.0"
 
       - name: Download binary artifact
         uses: actions/download-artifact@v4
