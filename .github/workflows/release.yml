@@ -1,7 +1,15 @@
 name: release
 
 # Publish macvscr to npm on a v* tag, using npm trusted publishing (OIDC).
-# The npm package must be configured to trust this repo/workflow (done once on npm).
+#
+# Split into two jobs so each does one thing:
+#   1. build  — compiles the native arm64 binary on a macOS runner and uploads
+#               it as an artifact.
+#   2. publish — downloads the binary onto a minimal Linux runner and publishes
+#               to npm via Trusted Publishing (OIDC). Keeping the publish job on
+#               a plain `ubuntu-latest` runner isolates it from any build-runner
+#               specifics and matches the most common OIDC setup.
+
 on:
   push:
     tags:
@@ -12,8 +20,24 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  build:
     runs-on: macos-26 # Apple Silicon runner with Xcode 26 + macOS 26 SDK (native arm64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (arm64)
+        run: swift build -c release --arch arm64
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macvscr-binary
+          path: .build/release/macvscr
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
     environment: npm-release # must match the trusted-publisher environment on npm
     permissions:
       id-token: write # required for npm trusted publishing / provenance
@@ -24,22 +48,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # NOTE: do NOT set `registry-url`. When it is set, setup-node writes
-          # an .npmrc with `_authToken=${NODE_AUTH_TOKEN}`; with no token that
-          # becomes an empty authToken, which makes npm skip the OIDC path and
-          # fail with a misleading E404 (actions/setup-node#1551). The default
-          # registry is already registry.npmjs.org, so this param is unneeded.
+          # No `registry-url` and no NODE_AUTH_TOKEN: Trusted Publishing
+          # authenticates purely via the job's `id-token: write` permission
+          # (OIDC). The default registry is already registry.npmjs.org.
 
       - name: Upgrade npm (Trusted Publishing needs npm ≥ 11.5.1)
         run: npm install -g npm@latest
 
-      - name: Build (arm64)
-        run: swift build -c release --arch arm64
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macvscr-binary
+          path: /tmp/macvscr-download/
 
       - name: Stage binary into the npm package
         run: |
           mkdir -p npm/binaries
-          cp .build/release/macvscr npm/binaries/macvscr-darwin-arm64
+          mv /tmp/macvscr-download/macvscr npm/binaries/macvscr-darwin-arm64
           chmod +x npm/binaries/macvscr-darwin-arm64
           ls -lh npm/binaries/
 
